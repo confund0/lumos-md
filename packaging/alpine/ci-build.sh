@@ -12,6 +12,7 @@ printf '%s\n' "$ABUILD_KEY" > "$key"
 chmod 600 "$key"
 openssl rsa -in "$key" -pubout 2>/dev/null | cmp -s - keys/lumos-md.rsa.pub || { echo "FATAL: ABUILD_KEY does not match keys/lumos-md.rsa.pub" >&2; exit 1; }
 cp keys/lumos-md.rsa.pub /etc/apk/keys/
+cp keys/lumos-md.rsa.pub "$key.pub"
 
 work=/tmp/abuild
 mkdir -p "$work/distfiles" "$work/repo"
