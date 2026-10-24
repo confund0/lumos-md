@@ -8,7 +8,7 @@ arch="x86_64"
 license="AGPL-3.0-only"
 subpackages="$pkgname-doc"
 makedepends="cmake samurai qt6-qtbase-dev"
-checkdepends="catch2-3"
+checkdepends="catch2-3 font-dejavu"
 source="$pkgname-$pkgver.tar.gz::https://github.com/confund0/lumos-md/archive/refs/tags/v$pkgver.tar.gz"
 
 build() {

@@ -7,6 +7,7 @@ Build-Depends: debhelper-compat (= 13),
                ninja-build,
                qt6-base-dev,
                catch2 <!nocheck>,
+               fonts-dejavu-core <!nocheck>,
                python3 <!nocheck>
 Standards-Version: 4.7.2
 Homepage: https://github.com/confund0/lumos-md
