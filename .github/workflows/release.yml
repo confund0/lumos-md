@@ -14,14 +14,14 @@ jobs:
       matrix:
         alpine: ['3.23']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build the apk
         env:
           ABUILD_KEY: ${{ secrets.ABUILD_KEY }}
         run: >
           docker run --rm -e ABUILD_KEY -e TAG="$GITHUB_REF_NAME" -e ALPINE="${{ matrix.alpine }}"
           -v "$PWD:/src" -w /src "alpine:${{ matrix.alpine }}" sh packaging/alpine/ci-build.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: apk-alpine${{ matrix.alpine }}
           path: out/*.apk
@@ -33,12 +33,12 @@ jobs:
       matrix:
         debian: ['13']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build the deb
         run: >
           docker run --rm -e TAG="$GITHUB_REF_NAME" -e DEBIAN="${{ matrix.debian }}"
           -v "$PWD:/src" -w /src "debian:${{ matrix.debian }}" sh packaging/debian/ci-build.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: deb-debian${{ matrix.debian }}
           path: out/*.deb
@@ -48,8 +48,8 @@ jobs:
     needs: [alpine, debian]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true

@@ -26,7 +26,7 @@ export PACKAGER="confund0 <110197472+confund0@users.noreply.github.com>"
 (cd "$work/pkg" && abuild -F checksum && abuild -F -r)
 
 mkdir -p out
-for f in "$work"/repo/*/x86_64/lumos-md-"$ver"-r*.apk "$work"/repo/*/x86_64/lumos-md-doc-"$ver"-r*.apk; do
+for f in "$work"/repo/*/x86_64/lumos-md-"$ver"-r*.apk "$work"/repo/*/x86_64/lumos-md-dbg-"$ver"-r*.apk "$work"/repo/*/x86_64/lumos-md-doc-"$ver"-r*.apk; do
 	apk verify "$f"
 	base=$(basename "$f" .apk)
 	cp "$f" "out/$base-alpine$ALPINE-x86_64.apk"

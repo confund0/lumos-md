@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(lumos VERSION 0.1.0 LANGUAGES C CXX)
+project(lumos VERSION 0.1.1 LANGUAGES C CXX)
 
 if(PROJECT_IS_TOP_LEVEL)
   set(CMAKE_EXPORT_COMPILE_COMMANDS ON)

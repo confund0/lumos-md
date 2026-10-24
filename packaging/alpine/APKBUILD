@@ -1,12 +1,12 @@
 # Maintainer: confund0 <110197472+confund0@users.noreply.github.com>
 pkgname=lumos-md
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=0
 pkgdesc="Markdown editor that keeps the source text as the only truth"
 url="https://github.com/confund0/lumos-md"
 arch="x86_64"
 license="AGPL-3.0-only"
-subpackages="$pkgname-doc"
+subpackages="$pkgname-dbg $pkgname-doc"
 makedepends="cmake samurai qt6-qtbase-dev"
 checkdepends="catch2-3 font-dejavu"
 source="$pkgname-$pkgver.tar.gz::https://github.com/confund0/lumos-md/archive/refs/tags/v$pkgver.tar.gz"
