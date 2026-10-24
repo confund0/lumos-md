@@ -14,12 +14,12 @@ openssl rsa -in "$key" -pubout 2>/dev/null | cmp -s - keys/lumos-md.rsa.pub || {
 cp keys/lumos-md.rsa.pub /etc/apk/keys/
 
 work=/tmp/abuild
-mkdir -p "$work/src" "$work/repo"
+mkdir -p "$work/distfiles" "$work/repo"
 git config --global --add safe.directory /src
-git archive --prefix="lumos-md-$ver/" -o "$work/src/lumos-md-$ver.tar.gz" HEAD
+git archive --prefix="lumos-md-$ver/" -o "$work/distfiles/lumos-md-$ver.tar.gz" HEAD
 cp packaging/alpine/APKBUILD "$work/"
 
-export SRCDEST="$work/src" REPODEST="$work/repo" PACKAGER_PRIVKEY="$key"
+export SRCDEST="$work/distfiles" REPODEST="$work/repo" PACKAGER_PRIVKEY="$key"
 export PACKAGER="confund0 <110197472+confund0@users.noreply.github.com>"
 (cd "$work" && abuild -F checksum && abuild -F -r)
 

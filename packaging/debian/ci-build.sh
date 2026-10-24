@@ -7,7 +7,7 @@ grep -q "^project(lumos VERSION $ver " CMakeLists.txt || { echo "FATAL: CMakeLis
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
 apt-get install -y -q --no-install-recommends build-essential devscripts equivs lintian
-mk-build-deps -i -r -t 'apt-get install -y -q --no-install-recommends' packaging/debian/control
+mk-build-deps -i -r -t 'apt-get -y -q --no-install-recommends' packaging/debian/control
 
 sh packaging/debian/build-deb.sh "$PWD" /tmp/deb-out
 if grep -E '^[EW]:' /tmp/deb-out/lintian.log; then
