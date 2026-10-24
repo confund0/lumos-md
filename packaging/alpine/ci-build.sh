@@ -5,7 +5,8 @@ ver=${TAG#v}
 grep -qx "pkgver=$ver" packaging/alpine/APKBUILD || { echo "FATAL: APKBUILD pkgver is not $ver" >&2; exit 1; }
 grep -q "^project(lumos VERSION $ver " CMakeLists.txt || { echo "FATAL: CMakeLists.txt version is not $ver" >&2; exit 1; }
 
-apk add --no-cache abuild build-base git openssl
+apk update
+apk add abuild build-base git openssl
 
 key=/root/lumos-md.rsa
 printf '%s\n' "$ABUILD_KEY" > "$key"
@@ -15,14 +16,14 @@ cp keys/lumos-md.rsa.pub /etc/apk/keys/
 cp keys/lumos-md.rsa.pub "$key.pub"
 
 work=/tmp/abuild
-mkdir -p "$work/distfiles" "$work/repo"
+mkdir -p "$work/pkg" "$work/distfiles" "$work/repo"
 git config --global --add safe.directory /src
 git archive --prefix="lumos-md-$ver/" -o "$work/distfiles/lumos-md-$ver.tar.gz" HEAD
-cp packaging/alpine/APKBUILD "$work/"
+cp packaging/alpine/APKBUILD "$work/pkg/"
 
 export SRCDEST="$work/distfiles" REPODEST="$work/repo" PACKAGER_PRIVKEY="$key"
 export PACKAGER="confund0 <110197472+confund0@users.noreply.github.com>"
-(cd "$work" && abuild -F checksum && abuild -F -r)
+(cd "$work/pkg" && abuild -F checksum && abuild -F -r)
 
 mkdir -p out
 for f in "$work"/repo/*/x86_64/lumos-md-"$ver"-r*.apk "$work"/repo/*/x86_64/lumos-md-doc-"$ver"-r*.apk; do
