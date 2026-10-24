@@ -1,0 +1,70 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  alpine:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        alpine: ['3.23']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the apk
+        env:
+          ABUILD_KEY: ${{ secrets.ABUILD_KEY }}
+        run: >
+          docker run --rm -e ABUILD_KEY -e TAG="$GITHUB_REF_NAME" -e ALPINE="${{ matrix.alpine }}"
+          -v "$PWD:/src" -w /src "alpine:${{ matrix.alpine }}" sh packaging/alpine/ci-build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk-alpine${{ matrix.alpine }}
+          path: out/*.apk
+          if-no-files-found: error
+
+  debian:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        debian: ['13']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the deb
+        run: >
+          docker run --rm -e TAG="$GITHUB_REF_NAME" -e DEBIAN="${{ matrix.debian }}"
+          -v "$PWD:/src" -w /src "debian:${{ matrix.debian }}" sh packaging/debian/ci-build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-debian${{ matrix.debian }}
+          path: out/*.deb
+          if-no-files-found: error
+
+  release:
+    needs: [alpine, debian]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Sign and create the draft release
+        env:
+          MINISIGN_KEY: ${{ secrets.MINISIGN_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q minisign
+          cp keys/lumos-md.rsa.pub keys/minisign.pub dist/
+          cd dist
+          sha256sum -- * > SHA256SUMS
+          printf '%s\n' "$MINISIGN_KEY" > "$RUNNER_TEMP/minisign.key"
+          printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -s "$RUNNER_TEMP/minisign.key" -m SHA256SUMS -t "lumos-md $GITHUB_REF_NAME"
+          rm -f "$RUNNER_TEMP/minisign.key"
+          minisign -V -m SHA256SUMS -p minisign.pub
+          gh release create "$GITHUB_REF_NAME" --draft --title "lumos-md $GITHUB_REF_NAME" --notes "" -- *

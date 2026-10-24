@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <radialGradient id="glow" cx="64" cy="36" r="46" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffd27a" stop-opacity="0.75"/>
+      <stop offset="1" stop-color="#ffd27a" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="flame" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff9a2e"/>
+      <stop offset="1" stop-color="#ff5a1f"/>
+    </linearGradient>
+    <linearGradient id="wax" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#fbf4e4"/>
+      <stop offset="1" stop-color="#e3d5b6"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="24" fill="#1f2a44"/>
+  <circle cx="64" cy="36" r="46" fill="url(#glow)"/>
+  <rect x="38" y="58" width="52" height="58" rx="6" fill="url(#wax)"/>
+  <ellipse cx="64" cy="59" rx="26" ry="5" fill="#fffaf0"/>
+  <path d="M48 106V70h8l8 14 8-14h8v36h-7V82l-9 14-9-14v24z" fill="#1f2a44"/>
+  <path d="M64 59v-9" stroke="#3a3a3a" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M64 16c10 13 13 24 0 34c-13-10-10-21 0-34z" fill="url(#flame)"/>
+  <path d="M64 30c5 7 6 12 0 17c-6-5-5-10 0-17z" fill="#fff1b8"/>
+</svg>

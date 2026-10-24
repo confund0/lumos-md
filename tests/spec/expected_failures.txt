@@ -1,0 +1,11 @@
+# Spec examples that may fail at the current stage.
+# A listed example that passes fails the run: the list only shrinks.
+# Regenerate with: lumos_spec --list-failures
+
+# Stage 6c (GFM extended autolinks: www., bare scheme, bare email) is done.
+
+[commonmark-0.31.2.txt]
+
+[gfm-0.29.txt]
+
+[extensions.txt]

@@ -1,0 +1,49 @@
+.TH LUMOS\-MD 1 2026-10-23 "lumos\-md 0.1.0" "User Commands"
+.SH NAME
+lumos\-md \- Markdown editor
+.SH SYNOPSIS
+.B lumos\-md
+.RI [ file ]
+.SH DESCRIPTION
+.B lumos\-md
+edits Markdown files as source text, with syntax colours and format
+commands. It follows CommonMark and GitHub Flavored Markdown. Every edit
+is a text edit.
+.PP
+With a
+.IR file ,
+it opens that file. Without one, it opens an empty document.
+.SH OPTIONS
+.TP
+.BR \-h ", " \-\-help
+Print the options and exit.
+.SH FILES
+.TP
+.I \(ti/.config/lumos\-md/lumos\-md.ini
+The settings. For debug lines in the log, add
+.B debug=true
+under
+.B [log]
+in this file.
+.TP
+.I \(ti/.local/state/lumos\-md/lumos\-md.log
+The log, one line per event. At 1 MB it moves to
+.IR lumos\-md.log.1 .
+.TP
+.I \(ti/.lumos\-md/
+If
+.I \(ti/.lumos\-md/lumos\-md.ini
+exists, the settings and the log are in this directory instead.
+.SH ENVIRONMENT
+.TP
+.B XDG_CONFIG_HOME
+Replaces
+.I \(ti/.config
+in the paths above.
+.TP
+.B XDG_STATE_HOME
+Replaces
+.I \(ti/.local/state
+in the paths above.
+.SH BUGS
+https://github.com/confund0/lumos\-md/issues

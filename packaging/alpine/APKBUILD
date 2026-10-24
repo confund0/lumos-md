@@ -1,0 +1,36 @@
+# Maintainer: confund0 <110197472+confund0@users.noreply.github.com>
+pkgname=lumos-md
+pkgver=0.1.0
+pkgrel=0
+pkgdesc="Markdown editor that keeps the source text as the only truth"
+url="https://github.com/confund0/lumos-md"
+arch="x86_64"
+license="AGPL-3.0-only"
+subpackages="$pkgname-doc"
+makedepends="cmake samurai qt6-qtbase-dev"
+checkdepends="catch2-3"
+source="$pkgname-$pkgver.tar.gz::https://github.com/confund0/lumos-md/archive/refs/tags/v$pkgver.tar.gz"
+
+build() {
+	local tests=OFF
+	want_check && tests=ON
+	cmake -B build -G Ninja \
+		-DCMAKE_BUILD_TYPE=None \
+		-DCMAKE_INSTALL_PREFIX=/usr \
+		-DLUMOS_WERROR=OFF \
+		-DLUMOS_BUILD_BENCH=OFF \
+		-DLUMOS_BUILD_TESTS=$tests
+	cmake --build build
+}
+
+check() {
+	ctest --test-dir build -j"${JOBS:-2}" --output-on-failure
+}
+
+package() {
+	DESTDIR="$pkgdir" cmake --install build
+}
+
+sha512sums="
+SKIP
+"

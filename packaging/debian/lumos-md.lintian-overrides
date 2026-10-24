@@ -1,0 +1,2 @@
+# Packages for the project's own releases, not uploads to the Debian archive: no ITP bug.
+lumos-md: initial-upload-closes-no-bugs

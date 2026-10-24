@@ -1,0 +1,22 @@
+Source: lumos-md
+Section: editors
+Priority: optional
+Maintainer: confund0 <110197472+confund0@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13),
+               cmake,
+               ninja-build,
+               qt6-base-dev,
+               catch2 <!nocheck>,
+               python3 <!nocheck>
+Standards-Version: 4.7.2
+Homepage: https://github.com/confund0/lumos-md
+Rules-Requires-Root: no
+
+Package: lumos-md
+Architecture: amd64
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Markdown editor that keeps the source text as the only truth
+ lumos-md edits Markdown files as source text, with syntax colours and
+ format commands: lists, bold, italic, links, headings, quotes, code
+ blocks and tables. Every edit is a text edit. It follows CommonMark
+ 0.31.2 and GitHub Flavored Markdown.

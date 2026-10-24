@@ -1,0 +1,39 @@
+# Build output
+/build/
+/build-*/
+/out/
+cmake-build-*/
+CMakeUserPresets.json
+compile_commands.json
+
+# Compiled files
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.pdb
+*.ilk
+
+# Fuzzing
+/fuzz/corpus/
+crash-*
+leak-*
+timeout-*
+oom-*
+
+# Editors and OS
+*~
+*.swp
+.DS_Store
+Thumbs.db
+
+# clangd index
+/.cache/
+
+# Local scratch
+/tmp/

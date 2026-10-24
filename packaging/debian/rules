@@ -1,0 +1,19 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+ifneq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+LUMOS_TESTS = OFF
+else
+LUMOS_TESTS = ON
+endif
+
+%:
+	dh $@ --buildsystem=cmake+ninja
+
+override_dh_auto_configure:
+	dh_auto_configure -- \
+		-DFETCHCONTENT_FULLY_DISCONNECTED=ON \
+		-DLUMOS_WERROR=OFF \
+		-DLUMOS_BUILD_BENCH=OFF \
+		-DLUMOS_BUILD_TESTS=$(LUMOS_TESTS)

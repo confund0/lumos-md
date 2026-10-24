@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=lumos-md
+GenericName=Markdown Editor
+Comment=Edit Markdown files
+Exec=lumos-md %f
+Terminal=false
+Categories=Utility;TextEditor;
+MimeType=text/markdown;
+Icon=lumos-md
