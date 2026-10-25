@@ -95,7 +95,13 @@ host applies the edits as one undo step.
   undo step.
 - `FindOptions`: `case_sensitive`, `whole_word`, `regex`.
 - Literal case-insensitive search uses the full Unicode case fold. Regex
-  is `std::regex` (ECMAScript); its case folding is ASCII only.
+  is PCRE2 syntax in UTF mode; its case folding is Unicode simple case
+  folding. Each line is its own regex subject: `^` and `$` match at
+  each line, and no match crosses a line break. An empty match right
+  after a match is left out (`a*` on `baaaac` gives 3 hits). A pattern
+  that is not valid, or one that hits the PCRE2 match
+  or heap limit, gives std::nullopt. A long match is safe on a thread
+  with a small stack.
 - The functions keep no state. The host keeps the match list and the
   current match.
 

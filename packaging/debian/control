@@ -4,7 +4,9 @@ Priority: optional
 Maintainer: confund0 <110197472+confund0@users.noreply.github.com>
 Build-Depends: debhelper-compat (= 13),
                cmake,
+               libpcre2-dev,
                ninja-build,
+               pkgconf,
                qt6-base-dev,
                catch2 <!nocheck>,
                fonts-dejavu-core <!nocheck>,

@@ -34,6 +34,11 @@ License: Creative Commons Attribution-ShareAlike 4.0 International
 Copyright © 2014-16 John MacFarlane. The share-alike terms apply to these
 files only, not to the code that reads them.
 
+## Regex library
+
+Regex find links the system PCRE2 library (BSD 3-Clause License with the
+PCRE2 exception). It is not part of this repository.
+
 ## Test library
 
 The tests use Catch2 (Boost Software License 1.0), fetched from GitHub at

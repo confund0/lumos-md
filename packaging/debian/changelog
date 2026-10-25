@@ -1,3 +1,11 @@
+lumos-md (0.1.2-1) unstable; urgency=medium
+
+  * Fixed the regex find stack overflow: it uses PCRE2 now.
+  * Fixed the slow regex find and replace on long texts.
+  * Updated regex find to match each line on its own, as sed does.
+
+ -- confund0 <110197472+confund0@users.noreply.github.com>  Sun, 25 Oct 2026 12:00:00 +0000
+
 lumos-md (0.1.1-1) unstable; urgency=medium
 
   * Added the Alpine debug package next to the Debian one.

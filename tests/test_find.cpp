@@ -1,5 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
+#include <pthread.h>
 
+#include <chrono>
 #include <cstddef>
 #include <optional>
 #include <random>
@@ -121,13 +123,115 @@ TEST_CASE("find: regex zero-width match does not loop forever", "[find]") {
   CHECK(r->size() == 4);  
 }
 
-TEST_CASE("find: regex . matches one byte, not one codepoint (accepted open item)", "[find]") {
+TEST_CASE("find: regex . matches one codepoint", "[find]") {
   Document doc("\xc3\xa9");  
   FindOptions opt;
   opt.regex = true;
   const auto r = find_all(doc, ".", opt);
   REQUIRE(r.has_value());
-  CHECK(r->size() == 2);  
+  CHECK(*r == std::vector<ByteRange>{{0, 2}});
+}
+
+TEST_CASE("find: case-insensitive regex folds Unicode case", "[find]") {
+  Document doc("\xc3\x89t\xc3\xa9");  
+  FindOptions opt;
+  opt.regex = true;
+  const auto r = find_all(doc, "\xc3\xa9", opt);
+  REQUIRE(r.has_value());
+  CHECK(*r == std::vector<ByteRange>{{0, 2}, {3, 5}});
+}
+
+TEST_CASE("find: regex skips bytes that are not valid UTF-8", "[find]") {
+  Document doc("a\xff" "b\xc3");
+  FindOptions opt;
+  opt.regex = true;
+  const auto dot = find_all(doc, ".", opt);
+  REQUIRE(dot.has_value());
+  CHECK(*dot == std::vector<ByteRange>{{0, 1}, {2, 3}});
+  CHECK(find_all(doc, "x*", opt).has_value());
+}
+
+TEST_CASE("find: regex sees a bad byte as the edge of the text", "[find]") {
+  Document doc("a\xff" "b");
+  FindOptions opt;
+  opt.regex = true;
+  const auto r = find_all(doc, "^b", opt);
+  REQUIRE(r.has_value());
+  CHECK(*r == std::vector<ByteRange>{{2, 3}});
+  CHECK(replace_one(doc, ByteRange{2, 3}, "^b", "X", opt).has_value());
+  CHECK_FALSE(replace_one(doc, ByteRange{0, 3}, "a.b", "X", opt).has_value());
+}
+
+TEST_CASE("find: regex with one hit per character on a 1 MiB line is linear", "[find]") {
+  const std::size_t size = 1024 * 1024;
+  const Document doc(std::string(size, 'a'));
+  FindOptions opt;
+  opt.regex = true;
+  const auto start = std::chrono::steady_clock::now();
+  const auto r = find_all(doc, ".", opt);
+  const auto took = std::chrono::steady_clock::now() - start;
+  REQUIRE(r.has_value());
+  CHECK(r->size() == size);
+  CHECK(took < std::chrono::seconds(5));
+}
+
+TEST_CASE("find: regex replace_all over 2,000 matches in 900 KB is linear", "[find]") {
+  const std::string line =
+      "1. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et "
+      "dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex "
+      "ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat "
+      "nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit "
+      "anim id est laborum.\n";
+  std::string text;
+  for (int i = 0; i < 2000; ++i) text += line;
+  const Document doc(text);
+  FindOptions opt;
+  opt.regex = true;
+  const auto start = std::chrono::steady_clock::now();
+  const auto r = replace_all(doc, "dolor\\ssit\\s(amet)", "x $1", opt);
+  const auto took = std::chrono::steady_clock::now() - start;
+  REQUIRE(r.has_value());
+  CHECK(r->edits.size() == 2000);
+  CHECK(r->edits.front().inserted == "x amet");
+  CHECK(took < std::chrono::seconds(2));
+}
+
+TEST_CASE("find: regex leaves out an empty match right after a match, as sed", "[find]") {
+  FindOptions opt;
+  opt.regex = true;
+  const auto replaced = [&](const char* text) {
+    Document doc(text);
+    const auto r = replace_all(doc, "a*", "x", opt);
+    REQUIRE(r.has_value());
+    apply(doc, *r);
+    return doc.text();
+  };
+  CHECK(replaced("baaaac") == "xbxcx");
+  CHECK(replaced("ab") == "xbx");
+  CHECK(replaced("bbb") == "xbxbxbx");
+  CHECK(replaced("aaa") == "x");
+}
+
+TEST_CASE("find: each line is its own regex subject, as sed", "[find]") {
+  Document doc("1. a\n2. b\r\n\n3. c\n");
+  FindOptions opt;
+  opt.regex = true;
+  const auto starts = find_all(doc, "^\\d", opt);
+  REQUIRE(starts.has_value());
+  CHECK(*starts == std::vector<ByteRange>{{0, 1}, {5, 6}, {12, 13}});
+  const auto ends = find_all(doc, "\\w$", opt);
+  REQUIRE(ends.has_value());
+  CHECK(*ends == std::vector<ByteRange>{{3, 4}, {8, 9}, {15, 16}});
+  const auto runs = find_all(doc, "[^x]+", opt);
+  REQUIRE(runs.has_value());
+  CHECK(*runs == std::vector<ByteRange>{{0, 4}, {5, 9}, {12, 16}});
+  const auto spaces = find_all(doc, "a\\s+2", opt);
+  REQUIRE(spaces.has_value());
+  CHECK(spaces->empty());
+  const auto empty = find_all(doc, "^$", opt);
+  REQUIRE(empty.has_value());
+  CHECK(*empty == std::vector<ByteRange>{{11, 11}});
+  CHECK(replace_one(doc, ByteRange{12, 13}, "^\\d", "X", opt).has_value());
 }
 
 TEST_CASE("find: replace_one replaces a literal match", "[find]") {
@@ -200,6 +304,114 @@ TEST_CASE("find: replace_all returns nullopt for an invalid regex", "[find]") {
   opt.regex = true;
   const auto r = replace_all(doc, "(", "z", opt);
   CHECK_FALSE(r.has_value());
+}
+
+TEST_CASE("find: replacement expands $&, $$, two-digit groups and unset groups", "[find]") {
+  Document doc("abcdefghijk");
+  FindOptions opt;
+  opt.regex = true;
+  const auto r = replace_one(doc, ByteRange{0, 11}, "(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(x)?", "[$11|$1|$&|$$|$12|$x]",
+                             opt);
+  REQUIRE(r.has_value());
+  apply(doc, *r);
+  CHECK(doc.text() == "[k|a|abcdefghijk|$||$x]");
+}
+
+TEST_CASE("find: replace_one matches with the text before the match in view", "[find]") {
+  Document doc("ab b");
+  FindOptions opt;
+  opt.regex = true;
+  const auto m = find_all(doc, "(?<=a)b", opt);
+  REQUIRE(m.has_value());
+  REQUIRE(*m == std::vector<ByteRange>{{1, 2}});
+  CHECK(replace_one(doc, (*m)[0], "(?<=a)b", "X", opt).has_value());
+  CHECK_FALSE(replace_one(doc, ByteRange{3, 4}, "(?<=a)b", "X", opt).has_value());
+}
+
+TEST_CASE("find: replace_one takes the non-empty match after an empty one", "[find]") {
+  Document doc("ab");
+  FindOptions opt;
+  opt.regex = true;
+  const auto m = find_all(doc, "(?=b)|b", opt);
+  REQUIRE(m.has_value());
+  REQUIRE(*m == std::vector<ByteRange>{{1, 1}, {1, 2}});
+  CHECK(replace_one(doc, ByteRange{1, 1}, "(?=b)|b", "X", opt).has_value());
+  CHECK(replace_one(doc, ByteRange{1, 2}, "(?=b)|b", "X", opt).has_value());
+  const auto r = replace_all(doc, "(?=b)|b", "X", opt);
+  REQUIRE(r.has_value());
+  apply(doc, *r);
+  CHECK(doc.text() == "aXX");
+}
+
+namespace {
+
+void run_on_small_stack(void (*fn)(void*), void* arg) {
+  struct Call {
+    void (*fn)(void*);
+    void* arg;
+  } call{fn, arg};
+  pthread_attr_t attr;
+  REQUIRE(pthread_attr_init(&attr) == 0);
+  REQUIRE(pthread_attr_setstacksize(&attr, 128 * 1024) == 0);
+  pthread_t t;
+  const int rc = pthread_create(
+      &t, &attr,
+      [](void* p) -> void* {
+        auto* c = static_cast<Call*>(p);
+        c->fn(c->arg);
+        return nullptr;
+      },
+      &call);
+  pthread_attr_destroy(&attr);
+  REQUIRE(rc == 0);
+  REQUIRE(pthread_join(t, nullptr) == 0);
+}
+
+struct LongLineRun {
+  const Document* doc;
+  std::optional<std::vector<ByteRange>> any;      
+  std::optional<std::vector<ByteRange>> none;     
+  std::optional<std::vector<ByteRange>> backtrack;  
+  std::optional<std::vector<ByteRange>> group;    
+  std::optional<CommandResult> replaced;          
+  std::optional<CommandResult> replaced_none;     
+};
+
+void long_line_run(void* p) {
+  auto* run = static_cast<LongLineRun*>(p);
+  FindOptions opt;
+  opt.regex = true;
+  run->any = find_all(*run->doc, "[^x]*", opt);
+  run->none = find_all(*run->doc, "(a|b)*c", opt);
+  run->backtrack = find_all(*run->doc, "(a*)*[bc]", opt);
+  run->group = find_all(*run->doc, "(a|b)*", opt);
+  run->replaced = replace_all(*run->doc, "[^x]*", "y", opt);
+  run->replaced_none = replace_all(*run->doc, "(a|b)*c", "y", opt);
+}
+
+void check_long_line_run(const LongLineRun& run, std::size_t size) {
+  REQUIRE(run.any.has_value());
+  CHECK(*run.any == std::vector<ByteRange>{{0, size}});
+  REQUIRE(run.none.has_value());
+  CHECK(run.none->empty());
+  CHECK_FALSE(run.backtrack.has_value());  
+  CHECK_FALSE(run.group.has_value());      
+  REQUIRE(run.replaced.has_value());
+  CHECK(run.replaced->edits.size() == 1);
+  CHECK_FALSE(run.replaced_none.has_value());
+}
+
+}  
+
+TEST_CASE("find: regex over a 4 MiB line on the main thread and a 128 KiB stack", "[find]") {
+  const std::size_t size = 4 * 1024 * 1024;
+  const Document doc(std::string(size, 'a'));
+  LongLineRun main_run{&doc, {}, {}, {}, {}, {}, {}};
+  long_line_run(&main_run);
+  check_long_line_run(main_run, size);
+  LongLineRun thread_run{&doc, {}, {}, {}, {}, {}, {}};
+  run_on_small_stack(long_line_run, &thread_run);
+  check_long_line_run(thread_run, size);
 }
 
 TEST_CASE("commands: property check of find and replace over random documents", "[random]") {

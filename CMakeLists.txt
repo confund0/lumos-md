@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(lumos VERSION 0.1.1 LANGUAGES C CXX)
+project(lumos VERSION 0.1.2 LANGUAGES C CXX)
 
 if(PROJECT_IS_TOP_LEVEL)
   set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -25,6 +25,9 @@ target_compile_features(lumos_core PUBLIC cxx_std_20)
 target_include_directories(lumos_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 target_include_directories(lumos_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LUMOS_PCRE2 REQUIRED IMPORTED_TARGET libpcre2-8>=10.30)
+target_link_libraries(lumos_core PRIVATE PkgConfig::LUMOS_PCRE2)
 lumos_harden(lumos_core)
 
 if(LUMOS_BUILD_TESTS)

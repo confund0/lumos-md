@@ -1,7 +1,8 @@
 # Build lumos
 
 Needs CMake 3.21 or later, a C++20 compiler and, for the Qt widget and
-the demo, Qt 6 (Widgets). Tested with GCC 15, Clang 21 and Qt 6.10 on
+the demo, Qt 6 (Widgets). The core needs PCRE2 (8-bit, 10.30 or later)
+and pkg-config. Tested with GCC 15, Clang 21 and Qt 6.10 on
 Alpine; Debian 13 has GCC 14, Clang 19 and Qt 6.8.
 The tests fetch Catch2 v3 from GitHub at configure time, so the first
 configure with tests needs the network.
@@ -9,13 +10,13 @@ configure with tests needs the network.
 ## Alpine Linux 3.23 and later
 
 ```sh
-apk add build-base cmake samurai git python3 qt6-qtbase-dev
+apk add build-base cmake samurai git pcre2-dev pkgconf python3 qt6-qtbase-dev
 ```
 
 ## Debian 13 and later
 
 ```sh
-apt install build-essential cmake ninja-build git python3 qt6-base-dev
+apt install build-essential cmake ninja-build git libpcre2-dev pkgconf python3 qt6-base-dev
 ```
 
 ## Other systems
