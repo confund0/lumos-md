@@ -136,9 +136,9 @@ TEST_CASE("logs at debug level carry no document text") {
     const lumos::FindOptions options{.case_sensitive = false, .whole_word = false, .regex = regex};
     (void)lumos::find_all(doc, "QZXMARK", options);
     (void)lumos::find_all(doc, "QZXMARK(", options);
-    apply_and_undo(doc, lumos::replace_all(doc, "QZXMARK", "QZXMARK QZXMARK", options));
-    if (const auto hits = lumos::find_all(doc, "QZXMARK", options); hits && !hits->empty()) {
-      apply_and_undo(doc, lumos::replace_one(doc, hits->front(), "QZXMARK", "x QZXMARK", options));
+    apply_and_undo(doc, lumos::replace_all(doc, "QZXMARK", "QZXMARK QZXMARK", options).command);
+    if (const auto found = lumos::find_all(doc, "QZXMARK", options); !found.hits.empty()) {
+      apply_and_undo(doc, lumos::replace_one(doc, found.hits.front(), "QZXMARK", "x QZXMARK", options));
     }
   }
 

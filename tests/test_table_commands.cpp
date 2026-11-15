@@ -220,6 +220,16 @@ TEST_CASE("commands: an aligned table gives no edits") {
   CHECK(r->edits.empty());
 }
 
+TEST_CASE("commands: the table's first byte after a block is in the table") {
+  const Document doc("x\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n");
+  const Selection sel{3, 3};
+  CHECK(format_at(doc, sel).table);
+  CHECK(format_table(doc, sel));
+  CHECK(next_cell(doc, sel, "\n"));
+  CHECK(next_row(doc, sel, "\n"));
+  CHECK_FALSE(format_table(doc, {2, 2}));
+}
+
 TEST_CASE("commands: not in a table gives nullopt") {
   const Document doc("plain text\n");
   const Selection sel{2, 2};
@@ -302,8 +312,10 @@ std::string random_table_document(std::mt19937& rng) {
 
 std::optional<std::pair<std::size_t, std::size_t>> table_range(const Document& doc, std::size_t pos) {
   const SyntaxTree& tree = doc.tree();
-  for (NodeId cur = tree.node_at(pos > 0 ? pos - 1 : 0); cur != no_node; cur = tree[cur].parent) {
-    if (tree[cur].kind == NodeKind::table) return std::pair{tree[cur].start, tree[cur].end};
+  for (NodeId start : {tree.node_at(pos > 0 ? pos - 1 : 0), tree.node_at(pos)}) {
+    for (NodeId cur = start; cur != no_node; cur = tree[cur].parent) {
+      if (tree[cur].kind == NodeKind::table) return std::pair{tree[cur].start, tree[cur].end};
+    }
   }
   return std::nullopt;
 }

@@ -136,6 +136,8 @@ void SourceEditor::set_text(std::string text, bool keep_position) {
     cursor_ = 0;
     anchor_ = 0;
   }
+  images_.clear();
+  pending_image_requests_.clear();
   doc_.load(std::move(text));
   desired_x_ = -1;
   ensure_layout();
@@ -262,6 +264,7 @@ void SourceEditor::on_change(const Change& change) {
       restyle(first, last);
       restyled += last - first + 1;
     }
+    if (touches_definition(change)) refresh_reference_images();
   }
   update_preedit_line();
   layout_dirty_ = true;
@@ -273,6 +276,7 @@ void SourceEditor::on_change(const Change& change) {
   if (change.kind != ChangeKind::load) emit textChanged();
   check_modified();
   check_undo_state();
+  flush_image_requests();
 }
 
 void SourceEditor::move_marks(const Change& change) {
@@ -407,6 +411,7 @@ void SourceEditor::restyle(std::size_t first, std::size_t last) {
   const std::size_t hi = lines_[last].span.next_start();
   std::vector<QList<QTextLayout::FormatRange>> formats(count);
   std::vector<char> background(count, 0);
+  std::vector<std::vector<LineImage>> images(count);
   struct Frame {
     NodeId end;
     QTextCharFormat format;
@@ -434,6 +439,28 @@ void SourceEditor::restyle(std::size_t first, std::size_t last) {
       continue;
     }
     while (!stack.empty() && stack.back().end <= id) stack.pop_back();
+    if (n.kind == NodeKind::image) {
+      const std::size_t end_line = line_index(n.end > n.start ? n.end - 1 : n.start);
+      if (end_line >= first && end_line <= last) {
+        if (const auto target = link_at(doc_, n.start); target && target->kind == md::UrlKind::image) {
+          std::string alt;
+          for (NodeId c : tree.children(id)) {
+            if (nodes[c].kind == NodeKind::link_text) {
+              alt = doc_.buffer().slice(nodes[c].start, nodes[c].end - nodes[c].start);
+              break;
+            }
+          }
+          LineImage li;
+          li.url = target->url;
+          li.start = n.start;
+          li.end = n.end;
+          li.alt = QString::fromUtf8(alt.data(), static_cast<int>(alt.size()));
+          li.reference = n.variant != link_variant_inline;
+          images[end_line - first].push_back(std::move(li));
+          queue_image(target->url);
+        }
+      }
+    }
     const bool line_bg = styles_.has_line_background(n);
     QTextCharFormat own = styles_.format(n);
     if (own.isEmpty() && !line_bg) {
@@ -461,13 +488,22 @@ void SourceEditor::restyle(std::size_t first, std::size_t last) {
     }
     ++id;
   }
+  auto same_images = [](const std::vector<LineImage>& a, const std::vector<LineImage>& b) {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i)
+      if (a[i].url != b[i].url || a[i].start != b[i].start || a[i].end != b[i].end || a[i].alt != b[i].alt)
+        return false;
+    return true;
+  };
   std::size_t changed = 0;
   for (std::size_t k = 0; k < count; ++k) {
     Line& l = lines_[first + k];
     const bool bg = background[k] != 0;
-    if (l.formats == formats[k] && l.background == bg) continue;
+    const bool same_imgs = same_images(l.images, images[k]);
+    if (l.formats == formats[k] && l.background == bg && same_imgs) continue;
     l.formats = std::move(formats[k]);
     l.background = bg;
+    if (!same_imgs) l.images = std::move(images[k]);
     l.layout.reset();
     ++changed;
   }
@@ -489,6 +525,168 @@ void SourceEditor::use_default_styles() {
   restyle();
   layout_dirty_ = true;
   viewport()->update();
+}
+
+void SourceEditor::set_image_max_height(int px) {
+  px = std::max(px, 0);
+  if (px == image_max_height_) return;
+  const bool turning_on = image_max_height_ == 0 && px > 0;
+  image_max_height_ = px;
+  for (Line& l : lines_) l.layout.reset();
+  layout_dirty_ = true;
+  if (turning_on) {
+    for (const Line& l : lines_)
+      for (const LineImage& img : l.images) queue_image(img.url);
+    flush_image_requests();
+  }
+  viewport()->update();
+}
+
+void SourceEditor::queue_image(const std::string& url) {
+  if (image_max_height_ <= 0) return;
+  if (images_.find(url) != images_.end()) return;
+  images_.emplace(url, ImageEntry{});
+  pending_image_requests_.push_back(url);
+}
+
+void SourceEditor::reload_images() {
+  images_.clear();
+  pending_image_requests_.clear();
+  for (Line& l : lines_) {
+    if (l.images.empty()) continue;
+    l.layout.reset();
+    for (const LineImage& img : l.images) queue_image(img.url);
+  }
+  layout_dirty_ = true;
+  flush_image_requests();
+  viewport()->update();
+}
+
+bool SourceEditor::touches_definition(const Change& change) const {
+  const SyntaxTree& tree = doc_.tree();
+  for (const auto& [from, to] : touched_ranges(change)) {
+    for (std::size_t i = line_index(from), last = line_index(to); i <= last && i < lines_.size(); ++i) {
+      const LineSpan& span = lines_[i].span;
+      for (const std::size_t at : {span.start, span.text_end() > span.start ? span.text_end() - 1 : span.start}) {
+        for (NodeId id = tree.node_at(at); id != no_node; id = tree[id].parent) {
+          if (tree[id].kind == NodeKind::link_reference_definition) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+void SourceEditor::refresh_reference_images() {
+  for (Line& l : lines_) {
+    for (LineImage& img : l.images) {
+      if (!img.reference) continue;
+      const auto target = link_at(doc_, img.start);
+      if (!target || target->url == img.url) continue;
+      img.url = target->url;
+      queue_image(img.url);
+      l.layout.reset();
+      layout_dirty_ = true;
+    }
+  }
+}
+
+void SourceEditor::flush_image_requests() {
+  if (pending_image_requests_.empty()) return;
+  std::vector<std::string> todo;
+  todo.swap(pending_image_requests_);
+  if (debug_on()) log(LogLevel::debug, kComp, "image_request", {{"count", num(todo.size())}});
+  for (const std::string& url : todo) emit imageRequested(url);
+}
+
+void SourceEditor::set_image(const std::string& url, const QImage& image) {
+  if (image.isNull()) {
+    set_image_failed(url);
+    return;
+  }
+  ImageEntry& e = images_[url];
+  e.state = ImageState::ready;
+  e.image = image;
+  e.scaled = QPixmap();
+  e.scaled_size = QSize();
+  if (debug_on())
+    log(LogLevel::debug, kComp, "image_set",
+        {{"ok", "1"}, {"w", num(static_cast<std::size_t>(std::max(0, image.width())))},
+         {"h", num(static_cast<std::size_t>(std::max(0, image.height())))}});
+  relayout_image(url);
+}
+
+void SourceEditor::set_image_failed(const std::string& url) {
+  ImageEntry& e = images_[url];
+  e.state = ImageState::failed;
+  e.image = QImage();
+  e.scaled = QPixmap();
+  e.scaled_size = QSize();
+  if (debug_on()) log(LogLevel::debug, kComp, "image_set", {{"ok", "0"}, {"w", "0"}, {"h", "0"}});
+  relayout_image(url);
+}
+
+void SourceEditor::relayout_image(const std::string& url) {
+  for (Line& l : lines_) {
+    for (const LineImage& img : l.images) {
+      if (img.url == url) {
+        l.layout.reset();
+        break;
+      }
+    }
+  }
+  layout_dirty_ = true;
+  viewport()->update();
+}
+
+int SourceEditor::image_gap() const { return QFontMetrics(font()).lineSpacing() / 4; }
+
+QSize SourceEditor::image_box_size(const LineImage& img) const {
+  const int width_limit = layout_width();
+  const auto it = images_.find(img.url);
+  if (it != images_.end() && it->second.state == ImageState::ready) {
+    const QImage& image = it->second.image;
+    const qreal dpr = image.devicePixelRatio() > 0 ? image.devicePixelRatio() : 1.0;
+    const qreal w = image.width() / dpr;
+    const qreal h = image.height() / dpr;
+    qreal scale = 1.0;
+    if (w > 0) scale = std::min(scale, width_limit / w);
+    if (h > 0) scale = std::min(scale, static_cast<qreal>(image_max_height_) / h);
+    return QSize(std::max(1, static_cast<int>(std::lround(w * scale))),
+                std::max(1, static_cast<int>(std::lround(h * scale))));
+  }
+  const QFontMetrics fm(font());
+  const QString text = img.alt.isEmpty() ? QString::fromStdString(img.url) : img.alt;
+  const int w = std::min(width_limit, fm.horizontalAdvance(text) + 8);
+  return QSize(std::max(1, w), fm.lineSpacing() + 4);
+}
+
+std::vector<std::pair<QRect, const SourceEditor::LineImage*>> SourceEditor::image_boxes(const Line& l) const {
+  std::vector<std::pair<QRect, const LineImage*>> out;
+  if (image_max_height_ <= 0) return out;
+  const int gap = image_gap();
+  int y = l.text_height;
+  for (const LineImage& img : l.images) {
+    y += gap;
+    const QSize size = image_box_size(img);
+    out.emplace_back(QRect(0, y, size.width(), size.height()), &img);
+    y += size.height() + gap;
+  }
+  return out;
+}
+
+std::optional<std::size_t> SourceEditor::image_at(QPointF doc_point) const {
+  if (image_max_height_ <= 0) return std::nullopt;
+  ensure_layout();
+  if (doc_point.y() < 0) return std::nullopt;
+  const Line& l = lines_[line_at_y(static_cast<int>(std::floor(doc_point.y())))];
+  const qreal local_y = doc_point.y() - l.y;
+  const qreal local_x = doc_point.x() - left_margin();
+  for (const auto& [rect, img] : image_boxes(l)) {
+    if (local_y >= rect.top() && local_y < rect.bottom() + 1 && local_x >= rect.left() && local_x < rect.right() + 1)
+      return img->start;
+  }
+  return std::nullopt;
 }
 
 void SourceEditor::set_max_text_width(int chars) {
@@ -568,7 +766,12 @@ void SourceEditor::layout_line(std::size_t index) const {
     height += tl.height();
   }
   layout->endLayout();
-  l.height = std::max(static_cast<int>(std::ceil(height)), 1);
+  l.text_height = std::max(static_cast<int>(std::ceil(height)), 1);
+  l.height = l.text_height;
+  if (image_max_height_ > 0 && !l.images.empty()) {
+    const auto boxes = image_boxes(l);
+    l.height = boxes.back().first.bottom() + 1 + image_gap();
+  }
   l.layout = std::move(layout);
 }
 
@@ -618,6 +821,11 @@ int SourceEditor::visual_line_count() const {
 
 QString SourceEditor::line_text(std::size_t line) const { return lines_.at(line).map.text(); }
 
+int SourceEditor::line_height(std::size_t line) const {
+  ensure_layout();
+  return lines_.at(line).height;
+}
+
 QList<QTextLayout::FormatRange> SourceEditor::line_formats(std::size_t line) const {
   const Line& l = lines_.at(line);
   QList<QTextLayout::FormatRange> out = l.formats;
@@ -662,6 +870,20 @@ std::size_t SourceEditor::hit_test(QPointF doc_point) const {
   const int y = std::max(0, static_cast<int>(std::floor(doc_point.y())));
   const Line& l = lines_[line_at_y(y)];
   const qreal local_y = doc_point.y() - l.y;
+  if (image_max_height_ > 0 && local_y >= l.text_height) {
+    const auto boxes = image_boxes(l);
+    if (!boxes.empty()) {
+      const int gap = image_gap();
+      const LineImage* chosen = boxes.back().second;
+      for (const auto& [rect, img] : boxes) {
+        if (local_y < rect.bottom() + 1 + gap) {
+          chosen = img;
+          break;
+        }
+      }
+      return snap(chosen->start);
+    }
+  }
   QTextLine tl = l.layout->lineAt(0);
   for (int j = 0; j < l.layout->lineCount(); ++j) {
     tl = l.layout->lineAt(j);
@@ -669,6 +891,23 @@ std::size_t SourceEditor::hit_test(QPointF doc_point) const {
   }
   const int pos = tl.xToCursor(doc_point.x() - left_margin());
   return snap(l.span.start + l.map.to_utf8(pos));
+}
+
+std::optional<std::size_t> SourceEditor::char_at(QPointF doc_point) const {
+  ensure_layout();
+  if (doc_point.y() < 0) return std::nullopt;
+  const Line& l = lines_[line_at_y(static_cast<int>(std::floor(doc_point.y())))];
+  const qreal local_y = doc_point.y() - l.y;
+  for (int j = 0; j < l.layout->lineCount(); ++j) {
+    const QTextLine tl = l.layout->lineAt(j);
+    if (local_y < tl.y() || local_y >= tl.y() + tl.height()) continue;
+    const qreal x = doc_point.x() - left_margin();
+    if (tl.textLength() == 0 || x < tl.x() || x >= tl.x() + tl.naturalTextWidth()) return std::nullopt;
+    const int pos = tl.xToCursor(x, QTextLine::CursorOnCharacter);
+    if (pos < tl.textStart() || pos >= tl.textStart() + tl.textLength()) return std::nullopt;
+    return l.span.start + l.map.to_utf8(pos);
+  }
+  return std::nullopt;
 }
 
 QRectF SourceEditor::caret_doc_rect() const {
@@ -1221,6 +1460,23 @@ void SourceEditor::mousePressEvent(QMouseEvent* e) {
     clear_preedit();
   }
   const bool shift = e->modifiers() & Qt::ShiftModifier;
+  if ((e->modifiers() & Qt::ControlModifier) && !shift) {
+    const QPointF doc_point = e->position() + QPointF(0, scroll_y());
+    if (const auto img = image_at(doc_point)) {
+      if (auto target = link_at(doc_, *img)) {
+        if (debug_on()) log(LogLevel::debug, kComp, "link_activated", {{"start", std::to_string(target->start)}});
+        emit linkActivated(*target);
+      }
+      return;
+    }
+    if (const auto at = char_at(doc_point)) {
+      if (auto target = link_at(doc_, *at)) {
+        if (debug_on()) log(LogLevel::debug, kComp, "link_activated", {{"start", std::to_string(target->start)}});
+        emit linkActivated(*target);
+        return;
+      }
+    }
+  }
   const std::size_t pos = hit_test(e->position() + QPointF(0, scroll_y()));
   const bool triple = double_click_ms_ >= 0 && !shift &&
                       e->timestamp() - static_cast<quint64>(double_click_ms_) <
@@ -1483,7 +1739,8 @@ void SourceEditor::paintEvent(QPaintEvent*) {
     const Line& l = lines_[i];
     if (l.y - top > view_h) break;
     const QPointF origin(text_x, l.y - top);
-    if (l.background) p.fillRect(QRectF(origin.x(), origin.y(), text_w, l.height), styles_.code_line_background);
+    if (l.background)
+      p.fillRect(QRectF(origin.x(), origin.y(), text_w, l.text_height), styles_.code_line_background);
     if (gutter_w > 0) {
       const QTextLine first = l.layout->lineAt(0);
       const QString number = QString::number(i + 1);
@@ -1508,6 +1765,39 @@ void SourceEditor::paintEvent(QPaintEvent*) {
       }
     }
     l.layout->draw(&p, origin, selections);
+    for (const auto& [rect, img] : image_boxes(l)) {
+      const QRect box(static_cast<int>(origin.x()) + rect.x(), static_cast<int>(origin.y()) + rect.y(),
+                      rect.width(), rect.height());
+      const auto it = images_.find(img->url);
+      if (it != images_.end() && it->second.state == ImageState::ready) {
+        ImageEntry& e = it->second;
+        const qreal dpr = devicePixelRatioF();
+        if (e.scaled_size != box.size() || e.scaled.isNull() || e.scaled.devicePixelRatio() != dpr) {
+          QImage scaled_image = e.image.scaled(box.size() * dpr, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+          scaled_image.setDevicePixelRatio(dpr);
+          e.scaled = QPixmap::fromImage(scaled_image);
+          e.scaled_size = box.size();
+        }
+        p.drawPixmap(box.topLeft(), e.scaled);
+      } else {
+        const bool failed = it != images_.end() && it->second.state == ImageState::failed;
+        const QTextCharFormat& fmt = failed ? styles_.image_failed : styles_.image_pending;
+        const QColor fg = fmt.foreground().color();
+        p.setPen(fg);
+        p.drawRect(box.adjusted(0, 0, -1, -1));
+        QFont box_font = font();
+        box_font.setStrikeOut(fmt.fontStrikeOut());
+        p.setFont(box_font);
+        const QString label = img->alt.isEmpty() ? QString::fromStdString(img->url) : img->alt;
+        p.drawText(box.adjusted(4, 0, -4, 0), Qt::AlignVCenter | Qt::AlignLeft, label);
+        p.setFont(font());
+      }
+      if (lo <= img->start && img->end <= hi) {
+        QColor hl = palette().highlight().color();
+        hl.setAlpha(100);
+        p.fillRect(box, hl);
+      }
+    }
     if (caret && i == caret_line) {
       int pos = to_utf16(l, cursor_);
       if (i == preedit_line_) {

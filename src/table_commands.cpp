@@ -334,11 +334,11 @@ std::optional<Located> locate(const Document& doc, std::size_t cursor) {
   const Buffer& buf = doc.buffer();
   const std::size_t line_no = buf.line_of(cursor);
   NodeId table = no_node;
-  for (NodeId cur = node_before(doc, cursor); cur != no_node; cur = tree[cur].parent) {
-    if (tree[cur].kind == NodeKind::table && line_no <= last_line_of(doc, cur)) {
-      table = cur;
-      break;
+  for (NodeId start : {node_before(doc, cursor), tree.node_at(cursor)}) {
+    for (NodeId cur = start; cur != no_node && table == no_node; cur = tree[cur].parent) {
+      if (tree[cur].kind == NodeKind::table && line_no <= last_line_of(doc, cur)) table = cur;
     }
+    if (table != no_node) break;
   }
   if (table == no_node) return std::nullopt;
   auto model = build_model(doc, table);

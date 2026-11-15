@@ -24,7 +24,8 @@ tree as a full parse.
 - HTML renderer with host hooks for URLs and nodes.
 - Qt 6 widget `SourceEditor`: source mode with syntax highlighting, own
   text layout, IME, bidi text, drag and drop, find marks, line numbers,
-  a centred text column.
+  a centred text column, pictures below their Markdown images, Ctrl+click
+  on links.
 - No toolkit types in the core library. Strings are UTF-8, positions are
   byte offsets.
 - The core logs to a sink that the host sets, one `key=value` line per

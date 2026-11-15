@@ -90,9 +90,13 @@ host applies the edits as one undo step.
 
 ## Find and replace (`lumos/commands.hpp`)
 
-- `find_all(doc, pattern, options)`: all matches as byte ranges.
-- `replace_one`, `replace_all`: command results; replace all is one
-  undo step.
+- `find_all(doc, pattern, options)`: a `FindResult`, the matches as
+  byte ranges (`hits`) and a `FindStatus`: `ok`, `invalid_pattern` (the
+  regex does not compile) or `limit_hit` (the regex hit a PCRE2 limit:
+  a valid pattern that is too costly). `hits` is empty unless `ok`.
+- `replace_one`: a command result. `replace_all`: a `ReplaceAllResult`,
+  the same status and the command (none on a failure or when nothing
+  matches); replace all is one undo step.
 - `FindOptions`: `case_sensitive`, `whole_word`, `regex`.
 - Literal case-insensitive search uses the full Unicode case fold. Regex
   is PCRE2 syntax in UTF mode; its case folding is Unicode simple case
@@ -110,6 +114,8 @@ host applies the edits as one undo step.
 - `properties(document, options)`: byte, character, word and line
   counts, counts of headings, links, tables and tasks, link targets and
   diagnostics.
+- `link_at(document, offset)`: the innermost link, image or autolink at
+  a byte offset, as a link target (url, form, node range), or none.
 - `url_form(url)`: the class of a link target (relative path, absolute
   path, file URL, URL with a scheme, other).
 
@@ -193,11 +199,21 @@ boundaries. All positions are UTF-8 byte offsets, as in the core.
   `page_margin` and the line number colours.
   `StyleTable::make_default(font, palette)` gives a theme that follows
   the palette. Set the table again after a theme change.
+- Images: `set_image_max_height(px)` (0, the default, turns them off)
+  shows each Markdown image below its source line, at most the text
+  width and `px` high, never scaled up. The widget asks for each url
+  once with `imageRequested(url)`; the host answers with
+  `set_image(url, image)` or `set_image_failed(url)`, at any time.
+  Until the answer a row with the alt text stands in its place; a
+  failed image keeps that row (`StyleTable::image_pending`,
+  `image_failed`). `set_text` clears all answers and asks again;
+  `reload_images()` does the same for a note that moved.
 - Positions on screen: `offset_at(point)` (for a context menu),
   `cursor_rect()`, both in viewport coordinates.
 - Slots: `undo`, `redo`, `cut`, `copy`, `paste`, `selectAll`.
 - Signals: `textChanged`, `modificationChanged`, `cursorPositionChanged`,
-  `canUndoChanged`, `canRedoChanged`. No state depends on them, so a
+  `canUndoChanged`, `canRedoChanged`, `linkActivated(target)`,
+  `imageRequested(url)`. No state depends on them, so a
   host can block them.
 
 ## What the widget does and what the host does
@@ -214,6 +230,9 @@ The widget:
   Ctrl+Z, Ctrl+C and so on only when the window has no shortcut for
   them.
 - Drops take only `text/plain` and `text/uri-list`.
+- Ctrl+click on a link, image or autolink emits `linkActivated` with its
+  target (`link_at`); the caret does not move. Elsewhere Ctrl+click is
+  a plain click.
 - Many widgets can be open at once; they share no state.
 
 The host:
@@ -227,6 +246,11 @@ The host:
 - Themes: the palette, the font and the `StyleTable`.
 - Files, tabs, saving and reloading (`set_text` with `keep_position`).
 - No drops: `setAcceptDrops(false)`.
+- Loading images: the slot for `imageRequested` reads the file (best
+  on a worker thread, scaled down to the max height) and calls
+  `set_image` or `set_image_failed`. The widget never reads files.
+- Opening a link: the slot for `linkActivated` resolves the url (for
+  example a relative path against the note's directory) and opens it.
 - HTML views and export: `render_html` with its hooks.
 
 `app/` (the lumos-md editor) is built on this API only; it is the

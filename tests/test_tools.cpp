@@ -114,6 +114,55 @@ TEST_CASE("tools: reference link expansion and unused definitions", "[tools]") {
   CHECK(p.link_expansion == 2 * (4 + 7));
 }
 
+TEST_CASE("tools: link_at gives the link, image or autolink at an offset", "[tools]") {
+  const std::string text = "a [b](http://x) ![i](p.png) <http://y> c\n";
+  const Document doc(text);
+  CHECK_FALSE(lumos::link_at(doc, 0).has_value());
+  CHECK_FALSE(lumos::link_at(doc, text.find(" c")).has_value());
+  CHECK_FALSE(lumos::link_at(doc, text.size()).has_value());
+
+  const std::size_t link_start = text.find('[');
+  const std::size_t link_end = text.find(')') + 1;
+  for (std::size_t offset = link_start; offset < link_end; ++offset) {
+    const auto target = lumos::link_at(doc, offset);
+    REQUIRE(target.has_value());
+    CHECK(target->kind == lumos::md::UrlKind::link);
+    CHECK(target->url == "http://x");
+    CHECK(target->start == link_start);
+    CHECK(target->end == link_end);
+  }
+  CHECK_FALSE(lumos::link_at(doc, link_end).has_value());  
+
+  const auto image = lumos::link_at(doc, text.find("p.png"));
+  REQUIRE(image.has_value());
+  CHECK(image->kind == lumos::md::UrlKind::image);
+  CHECK(image->url == "p.png");
+  CHECK(image->form == UrlForm::relative_path);
+
+  const auto autolink = lumos::link_at(doc, text.find("http://y"));
+  REQUIRE(autolink.has_value());
+  CHECK(autolink->url == "http://y");
+  CHECK(autolink->start == text.find('<'));
+}
+
+TEST_CASE("tools: link_at gives the innermost target and resolves references", "[tools]") {
+  const std::string text = "[![i](p.png)](q.md) [r]\n\n[r]: /abs\n";
+  const Document doc(text);
+  const auto image = lumos::link_at(doc, text.find('i'));
+  REQUIRE(image.has_value());
+  CHECK(image->kind == lumos::md::UrlKind::image);
+  CHECK(image->url == "p.png");
+  const auto outer = lumos::link_at(doc, text.find("(q.md)"));
+  REQUIRE(outer.has_value());
+  CHECK(outer->kind == lumos::md::UrlKind::link);
+  CHECK(outer->url == "q.md");
+  const auto ref = lumos::link_at(doc, text.find("[r]"));
+  REQUIRE(ref.has_value());
+  CHECK(ref->url == "/abs");
+  CHECK(ref->form == UrlForm::absolute_path);
+  CHECK_FALSE(lumos::link_at(doc, text.find("[r]:")).has_value());  
+}
+
 TEST_CASE("tools: url_form classifies forms", "[tools]") {
   CHECK(url_form("") == UrlForm::other);
   CHECK(url_form("#x") == UrlForm::other);

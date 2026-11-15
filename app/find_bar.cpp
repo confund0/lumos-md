@@ -7,6 +7,7 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPalette>
 #include <QPushButton>
 #include <QShortcut>
 #include <QTextCharFormat>
@@ -16,6 +17,17 @@
 #include <algorithm>
 
 #include "lumos/qt/source_editor.hpp"
+
+namespace {
+
+QColor mix(const QColor& a, const QColor& b, double t) {
+  auto ch = [t](int x, int y) { return static_cast<int>(x + (y - x) * t + 0.5); };
+  return QColor(ch(a.red(), b.red()), ch(a.green(), b.green()), ch(a.blue(), b.blue()));
+}
+
+const QColor issue_yellow(0xf0, 0xc0, 0x00);
+
+}  
 
 FindBar::FindBar(lumos::qt::SourceEditor* editor, QWidget* parent) : QWidget(parent), editor_(editor) {
   auto* outer = new QVBoxLayout(this);
@@ -115,8 +127,10 @@ lumos::FindOptions FindBar::options() const {
 }
 
 void FindBar::recompute_matches() {
-  const auto result = lumos::find_all(editor_->document(), pattern_->text().toStdString(), options());
-  matches_ = result.value_or(std::vector<lumos::ByteRange>{});
+  auto result = lumos::find_all(editor_->document(), pattern_->text().toStdString(), options());
+  matches_ = std::move(result.hits);
+  status_ = result.status;
+  replaced_.reset();
 }
 
 std::optional<std::size_t> FindBar::nearest(std::size_t pos, bool forward, bool wrap) const {
@@ -170,8 +184,10 @@ void FindBar::do_replace() {
 void FindBar::do_replace_all() {
   const std::string pattern = pattern_->text().toStdString();
   const std::string replacement = replacement_->text().toStdString();
-  editor_->apply_command(lumos::replace_all(editor_->document(), pattern, replacement, options()));
+  const auto result = lumos::replace_all(editor_->document(), pattern, replacement, options());
+  const bool applied = editor_->apply_command(result.command);
   recompute_matches();
+  if (applied) replaced_ = result.command->edits.size();
   current_ = nearest(editor_->selection().cursor,  true,  true);
   update_marks();
   update_count_label();
@@ -179,7 +195,9 @@ void FindBar::do_replace_all() {
 
 void FindBar::on_document_changed() {
   matches_.clear();
+  status_.reset();
   current_.reset();
+  replaced_.reset();
   update_marks();
   update_count_label();
 }
@@ -187,7 +205,9 @@ void FindBar::on_document_changed() {
 void FindBar::close_bar() {
   hide();
   matches_.clear();
+  status_.reset();
   current_.reset();
+  replaced_.reset();
   editor_->set_marks(2, {}, QTextCharFormat());
   editor_->set_marks(3, {}, QTextCharFormat());
   editor_->setFocus();
@@ -202,11 +222,33 @@ void FindBar::update_marks() {
 }
 
 void FindBar::update_count_label() {
-  if (matches_.empty()) {
+  bool issue = true;
+  if (replaced_) {
+    count_->setText(tr("%n replaced", nullptr, static_cast<int>(*replaced_)));
+    issue = false;
+  } else if (!status_ || pattern_->text().isEmpty()) {
+    count_->clear();
+    issue = false;
+  } else if (*status_ == lumos::FindStatus::invalid_pattern) {
+    count_->setText(tr("Invalid pattern"));
+  } else if (*status_ == lumos::FindStatus::limit_hit) {
+    count_->setText(tr("Pattern too slow"));
+  } else if (matches_.empty()) {
     count_->setText(tr("No matches"));
-  } else if (current_ && *current_ < matches_.size()) {
-    count_->setText(tr("%1/%2").arg(static_cast<int>(*current_ + 1)).arg(static_cast<int>(matches_.size())));
   } else {
-    count_->setText(tr("-/%1").arg(static_cast<int>(matches_.size())));
+    issue = false;
+    if (current_ && *current_ < matches_.size())
+      count_->setText(tr("%1/%2").arg(static_cast<int>(*current_ + 1)).arg(static_cast<int>(matches_.size())));
+    else
+      count_->setText(tr("-/%1").arg(static_cast<int>(matches_.size())));
+  }
+  if (issue) {
+    QPalette field = pattern_->palette();
+    field.setColor(QPalette::Base, mix(palette().color(QPalette::Base), issue_yellow, 0.35));
+    pattern_->setPalette(field);
+    count_->setStyleSheet(QStringLiteral("QLabel { background: #8a6d00; color: white; padding: 1px 6px; }"));
+  } else {
+    pattern_->setPalette(QPalette());
+    count_->setStyleSheet(QString());
   }
 }

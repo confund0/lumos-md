@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <new>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -140,7 +141,7 @@ class Regex {
     }
     re.data_.reset(pcre2_match_data_create_from_pattern(re.code_.get(), nullptr));
     re.context_.reset(pcre2_match_context_create(nullptr));
-    if (!re.data_ || !re.context_) return std::nullopt;
+    if (!re.data_ || !re.context_) throw std::bad_alloc();
     pcre2_set_match_limit(re.context_.get(), match_limit);
     pcre2_set_heap_limit(re.context_.get(), heap_limit_kib);
     return re;
@@ -243,14 +244,13 @@ bool for_each_regex_hit(std::string_view text, Regex& re, bool whole_word, Fn&& 
   return true;
 }
 
-std::optional<std::vector<ByteRange>> find_regex(std::string_view text, std::string_view pattern,
-                                                   bool case_sensitive, bool whole_word) {
+FindResult find_regex(std::string_view text, std::string_view pattern, bool case_sensitive, bool whole_word) {
   auto re = Regex::compile(pattern, case_sensitive);
-  if (!re) return std::nullopt;
+  if (!re) return {FindStatus::invalid_pattern, {}};
   std::vector<ByteRange> hits;
   if (!for_each_regex_hit(text, *re, whole_word, [&](ByteRange hit, std::string_view) { hits.push_back(hit); }))
-    return std::nullopt;
-  return hits;
+    return {FindStatus::limit_hit, {}};
+  return {FindStatus::ok, std::move(hits)};
 }
 
 struct ReplacementPart {
@@ -326,11 +326,11 @@ std::optional<std::string> expand_at(std::string_view text, ByteRange match, std
 
 }  
 
-std::optional<std::vector<ByteRange>> find_all(const Document& doc, std::string_view pattern, FindOptions options) {
-  if (pattern.empty()) return std::vector<ByteRange>{};
+FindResult find_all(const Document& doc, std::string_view pattern, FindOptions options) {
+  if (pattern.empty()) return {};
   const std::string text = doc.text();
   if (options.regex) return find_regex(text, pattern, options.case_sensitive, options.whole_word);
-  return find_literal(text, pattern, options.case_sensitive, options.whole_word);
+  return {FindStatus::ok, find_literal(text, pattern, options.case_sensitive, options.whole_word)};
 }
 
 std::optional<CommandResult> replace_one(const Document& doc, ByteRange match, std::string_view pattern,
@@ -347,24 +347,24 @@ std::optional<CommandResult> replace_one(const Document& doc, ByteRange match, s
   return r;
 }
 
-std::optional<CommandResult> replace_all(const Document& doc, std::string_view pattern, std::string_view replacement,
-                                         FindOptions options) {
-  if (pattern.empty()) return std::nullopt;
+ReplaceAllResult replace_all(const Document& doc, std::string_view pattern, std::string_view replacement,
+                             FindOptions options) {
+  if (pattern.empty()) return {};
   const std::string text = doc.text();
   std::vector<std::pair<ByteRange, std::string>> matches;
   if (options.regex) {
     auto re = Regex::compile(pattern, options.case_sensitive);
-    if (!re) return std::nullopt;
+    if (!re) return {FindStatus::invalid_pattern, std::nullopt};
     const std::vector<ReplacementPart> parts = parse_replacement(replacement);
     const bool ok = for_each_regex_hit(text, *re, options.whole_word, [&](ByteRange hit, std::string_view sub) {
       matches.emplace_back(hit, expand(sub, *re, parts));
     });
-    if (!ok) return std::nullopt;
+    if (!ok) return {FindStatus::limit_hit, std::nullopt};
   } else {
     for (const ByteRange hit : find_literal(text, pattern, options.case_sensitive, options.whole_word))
       matches.emplace_back(hit, std::string(replacement));
   }
-  if (matches.empty()) return std::nullopt;
+  if (matches.empty()) return {};
   CommandResult r;
   std::size_t selection_pos = 0;
   bool first = true;
@@ -384,7 +384,7 @@ std::optional<CommandResult> replace_all(const Document& doc, std::string_view p
   }
   r.selection = Selection{selection_pos, selection_pos};
   log_replace("replace_all", r.edits.size());
-  return r;
+  return {FindStatus::ok, std::move(r)};
 }
 
 }  

@@ -2,8 +2,10 @@
 
 #include <QAbstractScrollArea>
 #include <QBasicTimer>
+#include <QImage>
 #include <QList>
 #include <QMimeData>
+#include <QPixmap>
 #include <QRect>
 #include <QString>
 #include <QTextLayout>
@@ -15,10 +17,12 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "lumos/commands.hpp"
 #include "lumos/document.hpp"
+#include "lumos/tools.hpp"
 #include "lumos/qt/style_table.hpp"
 #include "lumos/qt/text_map.hpp"
 
@@ -85,6 +89,13 @@ class SourceEditor : public QAbstractScrollArea {
   QString line_text(std::size_t line) const;
   QList<QTextLayout::FormatRange> line_formats(std::size_t line) const;
 
+  int image_max_height() const { return image_max_height_; }
+  void set_image_max_height(int px);
+  void set_image(const std::string& url, const QImage& image);
+  void set_image_failed(const std::string& url);
+  void reload_images();
+  int line_height(std::size_t line) const;
+
  public slots:
   void undo();
   void redo();
@@ -99,6 +110,8 @@ class SourceEditor : public QAbstractScrollArea {
   void cursorPositionChanged();
   void canUndoChanged(bool can);
   void canRedoChanged(bool can);
+  void linkActivated(const lumos::LinkTarget& target);
+  void imageRequested(const std::string& url);
 
  protected:
   bool event(QEvent* e) override;
@@ -122,14 +135,29 @@ class SourceEditor : public QAbstractScrollArea {
   bool focusNextPrevChild(bool next) override;
 
  private:
+  struct LineImage {
+    std::string url;
+    std::size_t start = 0, end = 0;  
+    QString alt;  
+    bool reference = false;  
+  };
   struct Line {
     LineSpan span;
     Utf16Map map;
     QList<QTextLayout::FormatRange> formats;
     bool background = false;
+    std::vector<LineImage> images;
     std::unique_ptr<QTextLayout> layout;  
     int y = 0;
-    int height = 0;
+    int height = 0;       
+    int text_height = 0;  
+  };
+  enum class ImageState { requested, ready, failed };
+  struct ImageEntry {
+    ImageState state = ImageState::requested;
+    QImage image;
+    QPixmap scaled;    
+    QSize scaled_size;
   };
   enum class Group { none, typing, deleting };
   enum class Move { left, right, word_left, word_right, up, down, line_start, line_end, page_up, page_down,
@@ -171,6 +199,16 @@ class SourceEditor : public QAbstractScrollArea {
   void close_group();
   std::string normalize_newlines(std::string text) const;
   void select_word_at(std::size_t pos);
+  std::optional<std::size_t> char_at(QPointF doc_point) const;
+  std::optional<std::size_t> image_at(QPointF doc_point) const;
+  int image_gap() const;
+  QSize image_box_size(const LineImage& img) const;
+  std::vector<std::pair<QRect, const LineImage*>> image_boxes(const Line& l) const;
+  void queue_image(const std::string& url);
+  void flush_image_requests();
+  bool touches_definition(const Change& change) const;
+  void refresh_reference_images();
+  void relayout_image(const std::string& url);
   void restart_blink();
   void clear_preedit();
   void update_preedit_line();
@@ -193,6 +231,9 @@ class SourceEditor : public QAbstractScrollArea {
     QTextCharFormat format;
   };
   std::map<int, MarkLayer> marks_;
+  int image_max_height_ = 0;
+  std::unordered_map<std::string, ImageEntry> images_;
+  std::vector<std::string> pending_image_requests_;
   mutable std::vector<Line> lines_;
   mutable bool layout_dirty_ = true;
   mutable int layout_width_ = -1;

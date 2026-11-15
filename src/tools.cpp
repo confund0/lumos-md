@@ -90,6 +90,16 @@ bool is_scheme_char(char c) noexcept {
   return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '+' || c == '.' || c == '-';
 }
 
+LinkTarget make_target(md::UrlKind kind, std::string url, const Node& node) {
+  LinkTarget target;
+  target.kind = kind;
+  target.form = url_form(url);
+  target.url = std::move(url);
+  target.start = node.start;
+  target.end = node.end;
+  return target;
+}
+
 }  
 
 UrlForm url_form(std::string_view url) noexcept {
@@ -156,13 +166,8 @@ Properties properties(const Document& document, const PropertiesOptions& options
       if (node.kind == NodeKind::image) ++result.images; else ++result.links;
       const md::Resolved r = md::resolve_reference(tree, text, id, ref_defs);
       if (r.wrap) {
-        LinkTarget target;
-        target.kind = node.kind == NodeKind::image ? md::UrlKind::image : md::UrlKind::link;
-        target.url = r.href;
-        target.form = url_form(target.url);
-        target.start = node.start;
-        target.end = node.end;
-        result.targets.push_back(std::move(target));
+        result.targets.push_back(
+            make_target(node.kind == NodeKind::image ? md::UrlKind::image : md::UrlKind::link, r.href, node));
         if (node.variant != link_variant_inline) {
           std::uint64_t expansion = 0;
           if (r.destination_node != no_node) expansion += tree.node(r.destination_node).size();
@@ -172,13 +177,7 @@ Properties properties(const Document& document, const PropertiesOptions& options
       }
     } else if (node.kind == NodeKind::autolink) {
       ++result.links;
-      LinkTarget target;
-      target.kind = md::UrlKind::link;
-      target.url = md::autolink_url(tree, text, id);
-      target.form = url_form(target.url);
-      target.start = node.start;
-      target.end = node.end;
-      result.targets.push_back(std::move(target));
+      result.targets.push_back(make_target(md::UrlKind::link, md::autolink_url(tree, text, id), node));
     }
   }
   close_word(in_word, result.words);  
@@ -194,6 +193,25 @@ Properties properties(const Document& document, const PropertiesOptions& options
   log(LogLevel::debug, kComp, "properties",
       {{"bytes", num(result.bytes)}, {"words", num(result.words)}, {"targets", num(result.targets.size())}});
   return result;
+}
+
+std::optional<LinkTarget> link_at(const Document& document, std::size_t offset) {
+  const SyntaxTree& tree = document.tree();
+  const TextSource& text = document.buffer();
+  std::unordered_map<std::string, md::RefDef> ref_defs;
+  bool ref_defs_built = false;
+  for (NodeId id = tree.node_at(offset); id != no_node; id = tree.node(id).parent) {
+    const Node& node = tree.node(id);
+    if (node.kind == NodeKind::autolink) return make_target(md::UrlKind::link, md::autolink_url(tree, text, id), node);
+    if (node.kind != NodeKind::link && node.kind != NodeKind::image) continue;
+    if (node.variant != link_variant_inline && !ref_defs_built) {
+      ref_defs = md::build_ref_defs(tree, text);
+      ref_defs_built = true;
+    }
+    const md::Resolved r = md::resolve_reference(tree, text, id, ref_defs);
+    if (r.wrap) return make_target(node.kind == NodeKind::image ? md::UrlKind::image : md::UrlKind::link, r.href, node);
+  }
+  return std::nullopt;
 }
 
 }  

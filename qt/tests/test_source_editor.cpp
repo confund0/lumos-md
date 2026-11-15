@@ -98,6 +98,12 @@ class TestSourceEditor : public QObject {
   void navigation_keys();
   void selection_copy_cut_paste();
   void mouse_click_and_double_click();
+  void ctrl_click_on_link();
+  void inline_images_off_by_default();
+  void inline_images_requests();
+  void inline_images_sizes();
+  void inline_images_mouse();
+  void inline_images_reload_and_references();
   void home_end_on_rows();
   void modification_signals();
   void highlight_formats();
@@ -427,6 +433,173 @@ void TestSourceEditor::mouse_click_and_double_click() {
   QTest::mouseDClick(ed.viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(x, top + lh + lh / 2));
   QTest::mouseClick(ed.viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(x, top + lh + lh / 2), 2000);
   QVERIFY(!ed.has_selection());
+}
+
+void TestSourceEditor::ctrl_click_on_link() {
+  SourceEditor ed;
+  ed.resize(600, 400);
+  ed.set_text("see [doc](a.md) end\n![p](i.jpg)");
+  ed.show();
+  QVERIFY(QTest::qWaitForWindowExposed(&ed));
+  std::vector<lumos::LinkTarget> got;
+  QObject::connect(&ed, &SourceEditor::linkActivated, [&](const lumos::LinkTarget& t) { got.push_back(t); });
+  const QFontMetrics fm(ed.font());
+  const int lh = fm.height();
+  const int left = ed.cursor_rect().x();
+  const int top = ed.cursor_rect().y();
+  const int y = top + lh / 2;
+  const auto x_of = [&](const char* before) { return left + fm.horizontalAdvance(before) + 2; };
+
+  QTest::mouseClick(ed.viewport(), Qt::LeftButton, Qt::ControlModifier, QPoint(x_of("see [d"), y));
+  QCOMPARE(got.size(), std::size_t{1});
+  QCOMPARE(got[0].url, std::string("a.md"));
+  QCOMPARE(got[0].start, std::size_t{4});
+  QCOMPARE(ed.cursor_position(), std::size_t{0});
+  QTest::mouseClick(ed.viewport(), Qt::LeftButton, Qt::ControlModifier, QPoint(x_of("see [doc](a"), y));
+  QCOMPARE(got.size(), std::size_t{2});
+  QTest::mouseClick(ed.viewport(), Qt::LeftButton, Qt::ControlModifier, QPoint(x_of("see [doc](a.md) e"), y));
+  QCOMPARE(ed.cursor_position(), std::size_t{17});
+  QTest::mouseClick(ed.viewport(), Qt::LeftButton, Qt::ControlModifier, QPoint(500, y));
+  QTest::mouseClick(ed.viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(x_of("see [d"), y));
+  QCOMPARE(got.size(), std::size_t{2});
+  QCOMPARE(ed.cursor_position(), std::size_t{6});
+  ed.set_read_only(true);
+  QTest::mouseClick(ed.viewport(), Qt::LeftButton, Qt::ControlModifier, QPoint(x_of("![p](i"), y + lh));
+  QCOMPARE(got.size(), std::size_t{3});
+  QCOMPARE(got[2].url, std::string("i.jpg"));
+  QVERIFY(got[2].kind == lumos::md::UrlKind::image);
+}
+
+void TestSourceEditor::inline_images_off_by_default() {
+  SourceEditor ed;
+  ed.resize(800, 600);
+  QCOMPARE(ed.image_max_height(), 0);
+  std::vector<std::string> requested;
+  QObject::connect(&ed, &SourceEditor::imageRequested, [&](const std::string& url) { requested.push_back(url); });
+  ed.set_text("plain\n![a](p.png)\n");
+  QVERIFY(requested.empty());
+  QCOMPARE(ed.line_height(1), ed.line_height(0));
+}
+
+void TestSourceEditor::inline_images_requests() {
+  SourceEditor ed;
+  ed.resize(800, 600);
+  std::vector<std::string> requested;
+  QObject::connect(&ed, &SourceEditor::imageRequested, [&](const std::string& url) { requested.push_back(url); });
+  ed.set_image_max_height(320);
+  ed.set_text("![a](x.png)\n![b](x.png)\n![c](y.png)\n![d][r]\n\n[r]: z.png\n");
+  QCOMPARE(requested, (std::vector<std::string>{"x.png", "y.png", "z.png"}));
+
+  requested.clear();
+  ed.set_cursor_position(ed.length());
+  ed.insert_text("more text\n");
+  QVERIFY(requested.empty());
+
+  ed.insert_text("![e](w.png)\n");
+  QCOMPARE(requested, (std::vector<std::string>{"w.png"}));
+
+  requested.clear();
+  ed.set_text("![a](x.png)\n");
+  QCOMPARE(requested, (std::vector<std::string>{"x.png"}));
+
+  QObject::connect(&ed, &SourceEditor::imageRequested,
+                   [&](const std::string& url) { ed.set_image(url, QImage(10, 10, QImage::Format_RGB32)); });
+  ed.set_text("plain\n![a](q.png)\n");
+  const int base = ed.line_height(0);
+  const int gap2 = 2 * (QFontMetrics(ed.font()).lineSpacing() / 4);
+  QCOMPARE(ed.line_height(1) - base - gap2, 10);
+}
+
+void TestSourceEditor::inline_images_reload_and_references() {
+  SourceEditor ed;
+  ed.resize(800, 600);
+  std::vector<std::string> requested;
+  QObject::connect(&ed, &SourceEditor::imageRequested, [&](const std::string& url) { requested.push_back(url); });
+  ed.set_image_max_height(320);
+  const std::string text = "![a](x.png)\n![d][r]\n\none\n\ntwo\n\nthree\n\n[r]: z.png\n";
+  ed.set_text(text);
+  ed.set_image("x.png", QImage(10, 10, QImage::Format_RGB32));
+  const int ready = ed.line_height(0);
+
+  requested.clear();
+  ed.reload_images();
+  QCOMPARE(requested, (std::vector<std::string>{"x.png", "z.png"}));
+  QVERIFY(ed.line_height(0) != ready);
+
+  requested.clear();
+  const std::size_t at = text.find("z.png");
+  ed.select(at, at + 1);
+  ed.insert_text("k");
+  QCOMPARE(requested, (std::vector<std::string>{"k.png"}));
+}
+
+void TestSourceEditor::inline_images_sizes() {
+  SourceEditor ed;
+  ed.resize(800, 600);
+  ed.set_image_max_height(320);
+  ed.set_text("plain\n![a](p.png)\n");
+  const int base = ed.line_height(0);
+  const int gap2 = 2 * (QFontMetrics(ed.font()).lineSpacing() / 4);
+  const auto box_height = [&] { return ed.line_height(1) - base - gap2; };
+
+  QCOMPARE(box_height(), QFontMetrics(ed.font()).lineSpacing() + 4);
+
+  ed.set_image_failed("p.png");
+  QCOMPARE(box_height(), QFontMetrics(ed.font()).lineSpacing() + 4);
+
+  ed.set_image("p.png", QImage(10, 10, QImage::Format_RGB32));
+  QCOMPARE(box_height(), 10);
+
+  ed.set_image("p.png", QImage(100, 2000, QImage::Format_RGB32));
+  QCOMPARE(box_height(), 320);
+
+  QImage hi(200, 100, QImage::Format_RGB32);
+  hi.setDevicePixelRatio(2.0);
+  ed.set_image("p.png", hi);
+  QCOMPARE(box_height(), 50);
+
+  ed.set_image("p.png", QImage(2000, 100, QImage::Format_RGB32));
+  QVERIFY(box_height() > 0);
+  QVERIFY(box_height() < 100);
+}
+
+void TestSourceEditor::inline_images_mouse() {
+  SourceEditor ed;
+  ed.resize(600, 400);
+  ed.set_image_max_height(320);
+  const std::string text = "plain\n![p](i.jpg)\nthird\n";
+  ed.set_text(text);
+  ed.set_image("i.jpg", QImage(100, 60, QImage::Format_RGB32));
+  ed.show();
+  QVERIFY(QTest::qWaitForWindowExposed(&ed));
+
+  std::vector<lumos::LinkTarget> got;
+  QObject::connect(&ed, &SourceEditor::linkActivated, [&](const lumos::LinkTarget& t) { got.push_back(t); });
+
+  const std::size_t image_start = text.find('!');
+  const std::size_t third_start = text.find("third");
+  ed.set_cursor_position(image_start);
+  const int line_x = ed.cursor_rect().x();
+  const int line_top = ed.cursor_rect().y();
+  const int text_row = ed.cursor_rect().height();
+  const int gap = QFontMetrics(ed.font()).lineSpacing() / 4;
+  const int target_x = line_x + 10;
+  const int target_y = line_top + text_row + gap + 30;  
+
+  ed.set_cursor_position(0);
+  QTest::mouseClick(ed.viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(target_x, target_y));
+  QCOMPARE(ed.cursor_position(), image_start);
+
+  ed.set_cursor_position(0);
+  QTest::mouseClick(ed.viewport(), Qt::LeftButton, Qt::ControlModifier, QPoint(target_x, target_y));
+  QCOMPARE(got.size(), std::size_t{1});
+  QCOMPARE(got[0].url, std::string("i.jpg"));
+  QVERIFY(got[0].kind == lumos::md::UrlKind::image);
+  QCOMPARE(ed.cursor_position(), std::size_t{0});
+
+  ed.set_cursor_position(image_start);
+  key(&ed, Qt::Key_Down);
+  QCOMPARE(ed.cursor_position(), third_start);
 }
 
 void TestSourceEditor::home_end_on_rows() {

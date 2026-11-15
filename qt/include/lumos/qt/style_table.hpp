@@ -19,6 +19,8 @@ struct StyleTable {
   QColor code_line_background;
   QTextCharFormat find_hit;
   QTextCharFormat find_hit_current;
+  QTextCharFormat image_pending;
+  QTextCharFormat image_failed;
   QBrush page_background;
   QBrush outside_background;
   int page_padding = 24;

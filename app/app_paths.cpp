@@ -10,12 +10,15 @@ namespace {
 
 constexpr auto kSettingsName = "lumos-md.ini";
 constexpr auto kLogName = "lumos-md.log";
+constexpr auto kOpenTabsName = "open-tabs";
 
 }  
 
 QString AppPaths::settings_file() const { return QDir(config_dir).filePath(QString::fromLatin1(kSettingsName)); }
 
 QString AppPaths::log_file() const { return QDir(state_dir).filePath(QString::fromLatin1(kLogName)); }
+
+QString AppPaths::open_tabs_file() const { return QDir(state_dir).filePath(QString::fromLatin1(kOpenTabsName)); }
 
 AppPaths find_app_paths() {
   AppPaths p;

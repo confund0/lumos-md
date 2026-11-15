@@ -118,13 +118,24 @@ struct FindOptions {
   bool operator==(const FindOptions&) const = default;
 };
 
-std::optional<std::vector<ByteRange>> find_all(const Document& doc, std::string_view pattern,
-                                               FindOptions options);
+enum class FindStatus : std::uint8_t { ok, invalid_pattern, limit_hit };
+
+struct FindResult {
+  FindStatus status = FindStatus::ok;
+  std::vector<ByteRange> hits;
+};
+
+FindResult find_all(const Document& doc, std::string_view pattern, FindOptions options);
 
 std::optional<CommandResult> replace_one(const Document& doc, ByteRange match, std::string_view pattern,
                                          std::string_view replacement, FindOptions options);
 
-std::optional<CommandResult> replace_all(const Document& doc, std::string_view pattern,
-                                         std::string_view replacement, FindOptions options);
+struct ReplaceAllResult {
+  FindStatus status = FindStatus::ok;
+  std::optional<CommandResult> command;
+};
+
+ReplaceAllResult replace_all(const Document& doc, std::string_view pattern, std::string_view replacement,
+                             FindOptions options);
 
 }  

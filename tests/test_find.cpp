@@ -30,26 +30,26 @@ void apply(Document& doc, const CommandResult& r) {
 TEST_CASE("find: find_all finds a literal match", "[find]") {
   Document doc("abc abc");
   const auto r = find_all(doc, "abc", {});
-  REQUIRE(r.has_value());
-  REQUIRE(r->size() == 2);
-  CHECK((*r)[0] == ByteRange{0, 3});
-  CHECK((*r)[1] == ByteRange{4, 7});
+  REQUIRE(r.status == FindStatus::ok);
+  REQUIRE(r.hits.size() == 2);
+  CHECK(r.hits[0] == ByteRange{0, 3});
+  CHECK(r.hits[1] == ByteRange{4, 7});
 }
 
 TEST_CASE("find: find_all finds multiple non-overlapping matches", "[find]") {
   Document doc("aaaa");
   const auto r = find_all(doc, "aa", {});
-  REQUIRE(r.has_value());
-  REQUIRE(r->size() == 2);
-  CHECK((*r)[0] == ByteRange{0, 2});
-  CHECK((*r)[1] == ByteRange{2, 4});
+  REQUIRE(r.status == FindStatus::ok);
+  REQUIRE(r.hits.size() == 2);
+  CHECK(r.hits[0] == ByteRange{0, 2});
+  CHECK(r.hits[1] == ByteRange{2, 4});
 }
 
 TEST_CASE("find: find_all is case-insensitive by default", "[find]") {
   Document doc("ABC abc");
   const auto r = find_all(doc, "abc", {});
-  REQUIRE(r.has_value());
-  CHECK(r->size() == 2);
+  REQUIRE(r.status == FindStatus::ok);
+  CHECK(r.hits.size() == 2);
 }
 
 TEST_CASE("find: find_all case_sensitive true skips a different-case match", "[find]") {
@@ -57,24 +57,24 @@ TEST_CASE("find: find_all case_sensitive true skips a different-case match", "[f
   FindOptions opt;
   opt.case_sensitive = true;
   const auto r = find_all(doc, "abc", opt);
-  REQUIRE(r.has_value());
-  REQUIRE(r->size() == 1);
-  CHECK((*r)[0] == ByteRange{4, 7});
+  REQUIRE(r.status == FindStatus::ok);
+  REQUIRE(r.hits.size() == 1);
+  CHECK(r.hits[0] == ByteRange{4, 7});
 }
 
 TEST_CASE("find: find_all case-insensitive folds a multi-byte character", "[find]") {
   Document doc("a" + sharp_s_cap + "b");
   const auto r = find_all(doc, "ss", {});
-  REQUIRE(r.has_value());
-  REQUIRE(r->size() == 1);
-  CHECK((*r)[0] == ByteRange{1, 1 + sharp_s_cap.size()});
+  REQUIRE(r.status == FindStatus::ok);
+  REQUIRE(r.hits.size() == 1);
+  CHECK(r.hits[0] == ByteRange{1, 1 + sharp_s_cap.size()});
 }
 
 TEST_CASE("find: case-insensitive fold search does not match half of a folded character", "[find]") {
   Document doc("a" + sharp_s_cap + "b");
   const auto r = find_all(doc, "s", {});
-  REQUIRE(r.has_value());
-  CHECK(r->empty());
+  REQUIRE(r.status == FindStatus::ok);
+  CHECK(r.hits.empty());
 }
 
 TEST_CASE("find: whole_word excludes a match inside a longer word", "[find]") {
@@ -82,9 +82,9 @@ TEST_CASE("find: whole_word excludes a match inside a longer word", "[find]") {
   FindOptions opt;
   opt.whole_word = true;
   const auto r = find_all(doc, "cat", opt);
-  REQUIRE(r.has_value());
-  REQUIRE(r->size() == 1);
-  CHECK((*r)[0] == ByteRange{10, 13});
+  REQUIRE(r.status == FindStatus::ok);
+  REQUIRE(r.hits.size() == 1);
+  CHECK(r.hits[0] == ByteRange{10, 13});
 }
 
 TEST_CASE("find: whole_word allows a match at punctuation or a document edge", "[find]") {
@@ -92,26 +92,27 @@ TEST_CASE("find: whole_word allows a match at punctuation or a document edge", "
   FindOptions opt;
   opt.whole_word = true;
   const auto r = find_all(doc, "cat", opt);
-  REQUIRE(r.has_value());
-  REQUIRE(r->size() == 3);
-  CHECK((*r)[0] == ByteRange{0, 3});
-  CHECK((*r)[1] == ByteRange{5, 8});
-  CHECK((*r)[2] == ByteRange{9, 12});
+  REQUIRE(r.status == FindStatus::ok);
+  REQUIRE(r.hits.size() == 3);
+  CHECK(r.hits[0] == ByteRange{0, 3});
+  CHECK(r.hits[1] == ByteRange{5, 8});
+  CHECK(r.hits[2] == ByteRange{9, 12});
 }
 
 TEST_CASE("find: find_all with an empty pattern returns no matches", "[find]") {
   Document doc("abc");
   const auto r = find_all(doc, "", {});
-  REQUIRE(r.has_value());
-  CHECK(r->empty());
+  REQUIRE(r.status == FindStatus::ok);
+  CHECK(r.hits.empty());
 }
 
-TEST_CASE("find: find_all with an invalid regex returns nullopt", "[find]") {
+TEST_CASE("find: find_all with an invalid regex gives invalid_pattern", "[find]") {
   Document doc("abc");
   FindOptions opt;
   opt.regex = true;
   const auto r = find_all(doc, "(", opt);
-  CHECK_FALSE(r.has_value());
+  CHECK(r.status == FindStatus::invalid_pattern);
+  CHECK(r.hits.empty());
 }
 
 TEST_CASE("find: regex zero-width match does not loop forever", "[find]") {
@@ -119,8 +120,8 @@ TEST_CASE("find: regex zero-width match does not loop forever", "[find]") {
   FindOptions opt;
   opt.regex = true;
   const auto r = find_all(doc, "a*", opt);
-  REQUIRE(r.has_value());
-  CHECK(r->size() == 4);  
+  REQUIRE(r.status == FindStatus::ok);
+  CHECK(r.hits.size() == 4);  
 }
 
 TEST_CASE("find: regex . matches one codepoint", "[find]") {
@@ -128,8 +129,8 @@ TEST_CASE("find: regex . matches one codepoint", "[find]") {
   FindOptions opt;
   opt.regex = true;
   const auto r = find_all(doc, ".", opt);
-  REQUIRE(r.has_value());
-  CHECK(*r == std::vector<ByteRange>{{0, 2}});
+  REQUIRE(r.status == FindStatus::ok);
+  CHECK(r.hits == std::vector<ByteRange>{{0, 2}});
 }
 
 TEST_CASE("find: case-insensitive regex folds Unicode case", "[find]") {
@@ -137,8 +138,8 @@ TEST_CASE("find: case-insensitive regex folds Unicode case", "[find]") {
   FindOptions opt;
   opt.regex = true;
   const auto r = find_all(doc, "\xc3\xa9", opt);
-  REQUIRE(r.has_value());
-  CHECK(*r == std::vector<ByteRange>{{0, 2}, {3, 5}});
+  REQUIRE(r.status == FindStatus::ok);
+  CHECK(r.hits == std::vector<ByteRange>{{0, 2}, {3, 5}});
 }
 
 TEST_CASE("find: regex skips bytes that are not valid UTF-8", "[find]") {
@@ -146,9 +147,9 @@ TEST_CASE("find: regex skips bytes that are not valid UTF-8", "[find]") {
   FindOptions opt;
   opt.regex = true;
   const auto dot = find_all(doc, ".", opt);
-  REQUIRE(dot.has_value());
-  CHECK(*dot == std::vector<ByteRange>{{0, 1}, {2, 3}});
-  CHECK(find_all(doc, "x*", opt).has_value());
+  REQUIRE(dot.status == FindStatus::ok);
+  CHECK(dot.hits == std::vector<ByteRange>{{0, 1}, {2, 3}});
+  CHECK(find_all(doc, "x*", opt).status == FindStatus::ok);
 }
 
 TEST_CASE("find: regex sees a bad byte as the edge of the text", "[find]") {
@@ -156,8 +157,8 @@ TEST_CASE("find: regex sees a bad byte as the edge of the text", "[find]") {
   FindOptions opt;
   opt.regex = true;
   const auto r = find_all(doc, "^b", opt);
-  REQUIRE(r.has_value());
-  CHECK(*r == std::vector<ByteRange>{{2, 3}});
+  REQUIRE(r.status == FindStatus::ok);
+  CHECK(r.hits == std::vector<ByteRange>{{2, 3}});
   CHECK(replace_one(doc, ByteRange{2, 3}, "^b", "X", opt).has_value());
   CHECK_FALSE(replace_one(doc, ByteRange{0, 3}, "a.b", "X", opt).has_value());
 }
@@ -170,8 +171,8 @@ TEST_CASE("find: regex with one hit per character on a 1 MiB line is linear", "[
   const auto start = std::chrono::steady_clock::now();
   const auto r = find_all(doc, ".", opt);
   const auto took = std::chrono::steady_clock::now() - start;
-  REQUIRE(r.has_value());
-  CHECK(r->size() == size);
+  REQUIRE(r.status == FindStatus::ok);
+  CHECK(r.hits.size() == size);
   CHECK(took < std::chrono::seconds(5));
 }
 
@@ -190,9 +191,9 @@ TEST_CASE("find: regex replace_all over 2,000 matches in 900 KB is linear", "[fi
   const auto start = std::chrono::steady_clock::now();
   const auto r = replace_all(doc, "dolor\\ssit\\s(amet)", "x $1", opt);
   const auto took = std::chrono::steady_clock::now() - start;
-  REQUIRE(r.has_value());
-  CHECK(r->edits.size() == 2000);
-  CHECK(r->edits.front().inserted == "x amet");
+  REQUIRE(r.command.has_value());
+  CHECK(r.command->edits.size() == 2000);
+  CHECK(r.command->edits.front().inserted == "x amet");
   CHECK(took < std::chrono::seconds(2));
 }
 
@@ -202,8 +203,8 @@ TEST_CASE("find: regex leaves out an empty match right after a match, as sed", "
   const auto replaced = [&](const char* text) {
     Document doc(text);
     const auto r = replace_all(doc, "a*", "x", opt);
-    REQUIRE(r.has_value());
-    apply(doc, *r);
+    REQUIRE(r.command.has_value());
+    apply(doc, *r.command);
     return doc.text();
   };
   CHECK(replaced("baaaac") == "xbxcx");
@@ -217,29 +218,29 @@ TEST_CASE("find: each line is its own regex subject, as sed", "[find]") {
   FindOptions opt;
   opt.regex = true;
   const auto starts = find_all(doc, "^\\d", opt);
-  REQUIRE(starts.has_value());
-  CHECK(*starts == std::vector<ByteRange>{{0, 1}, {5, 6}, {12, 13}});
+  REQUIRE(starts.status == FindStatus::ok);
+  CHECK(starts.hits == std::vector<ByteRange>{{0, 1}, {5, 6}, {12, 13}});
   const auto ends = find_all(doc, "\\w$", opt);
-  REQUIRE(ends.has_value());
-  CHECK(*ends == std::vector<ByteRange>{{3, 4}, {8, 9}, {15, 16}});
+  REQUIRE(ends.status == FindStatus::ok);
+  CHECK(ends.hits == std::vector<ByteRange>{{3, 4}, {8, 9}, {15, 16}});
   const auto runs = find_all(doc, "[^x]+", opt);
-  REQUIRE(runs.has_value());
-  CHECK(*runs == std::vector<ByteRange>{{0, 4}, {5, 9}, {12, 16}});
+  REQUIRE(runs.status == FindStatus::ok);
+  CHECK(runs.hits == std::vector<ByteRange>{{0, 4}, {5, 9}, {12, 16}});
   const auto spaces = find_all(doc, "a\\s+2", opt);
-  REQUIRE(spaces.has_value());
-  CHECK(spaces->empty());
+  REQUIRE(spaces.status == FindStatus::ok);
+  CHECK(spaces.hits.empty());
   const auto empty = find_all(doc, "^$", opt);
-  REQUIRE(empty.has_value());
-  CHECK(*empty == std::vector<ByteRange>{{11, 11}});
+  REQUIRE(empty.status == FindStatus::ok);
+  CHECK(empty.hits == std::vector<ByteRange>{{11, 11}});
   CHECK(replace_one(doc, ByteRange{12, 13}, "^\\d", "X", opt).has_value());
 }
 
 TEST_CASE("find: replace_one replaces a literal match", "[find]") {
   Document doc("foo bar");
   const auto m = find_all(doc, "bar", {});
-  REQUIRE(m.has_value());
-  REQUIRE(m->size() == 1);
-  const auto r = replace_one(doc, (*m)[0], "bar", "baz", {});
+  REQUIRE(m.status == FindStatus::ok);
+  REQUIRE(m.hits.size() == 1);
+  const auto r = replace_one(doc, m.hits[0], "bar", "baz", {});
   REQUIRE(r.has_value());
   apply(doc, *r);
   CHECK(doc.text() == "foo baz");
@@ -265,8 +266,8 @@ TEST_CASE("find: replace_one returns nullopt when the match no longer matches pa
 TEST_CASE("find: replace_all applies every match as one undo step", "[find]") {
   Document doc("a a a");
   const auto r = replace_all(doc, "a", "bb", {});
-  REQUIRE(r.has_value());
-  apply(doc, *r);
+  REQUIRE(r.command.has_value());
+  apply(doc, *r.command);
   CHECK(doc.text() == "bb bb bb");
   doc.undo();
   CHECK(doc.text() == "a a a");
@@ -275,8 +276,8 @@ TEST_CASE("find: replace_all applies every match as one undo step", "[find]") {
 TEST_CASE("find: replace_all keeps the untouched text byte-identical", "[find]") {
   Document doc("XXXaYYYaZZZ");
   const auto r = replace_all(doc, "a", "Q", {});
-  REQUIRE(r.has_value());
-  apply(doc, *r);
+  REQUIRE(r.command.has_value());
+  apply(doc, *r.command);
   CHECK(doc.text() == "XXXQYYYQZZZ");
   CHECK(doc.text().substr(0, 3) == "XXX");
   CHECK(doc.text().substr(doc.text().size() - 3) == "ZZZ");
@@ -287,23 +288,25 @@ TEST_CASE("find: replace_all expands capture groups in every match", "[find]") {
   FindOptions opt;
   opt.regex = true;
   const auto r = replace_all(doc, "(a)(b)", "$2$1", opt);
-  REQUIRE(r.has_value());
-  apply(doc, *r);
+  REQUIRE(r.command.has_value());
+  apply(doc, *r.command);
   CHECK(doc.text() == "ba ba");
 }
 
-TEST_CASE("find: replace_all returns nullopt when there is no match", "[find]") {
+TEST_CASE("find: replace_all gives no command and status ok when there is no match", "[find]") {
   Document doc("xyz");
   const auto r = replace_all(doc, "q", "z", {});
-  CHECK_FALSE(r.has_value());
+  CHECK(r.status == FindStatus::ok);
+  CHECK_FALSE(r.command.has_value());
 }
 
-TEST_CASE("find: replace_all returns nullopt for an invalid regex", "[find]") {
+TEST_CASE("find: replace_all gives invalid_pattern for an invalid regex", "[find]") {
   Document doc("xyz");
   FindOptions opt;
   opt.regex = true;
   const auto r = replace_all(doc, "(", "z", opt);
-  CHECK_FALSE(r.has_value());
+  CHECK(r.status == FindStatus::invalid_pattern);
+  CHECK_FALSE(r.command.has_value());
 }
 
 TEST_CASE("find: replacement expands $&, $$, two-digit groups and unset groups", "[find]") {
@@ -322,9 +325,9 @@ TEST_CASE("find: replace_one matches with the text before the match in view", "[
   FindOptions opt;
   opt.regex = true;
   const auto m = find_all(doc, "(?<=a)b", opt);
-  REQUIRE(m.has_value());
-  REQUIRE(*m == std::vector<ByteRange>{{1, 2}});
-  CHECK(replace_one(doc, (*m)[0], "(?<=a)b", "X", opt).has_value());
+  REQUIRE(m.status == FindStatus::ok);
+  REQUIRE(m.hits == std::vector<ByteRange>{{1, 2}});
+  CHECK(replace_one(doc, m.hits[0], "(?<=a)b", "X", opt).has_value());
   CHECK_FALSE(replace_one(doc, ByteRange{3, 4}, "(?<=a)b", "X", opt).has_value());
 }
 
@@ -333,13 +336,13 @@ TEST_CASE("find: replace_one takes the non-empty match after an empty one", "[fi
   FindOptions opt;
   opt.regex = true;
   const auto m = find_all(doc, "(?=b)|b", opt);
-  REQUIRE(m.has_value());
-  REQUIRE(*m == std::vector<ByteRange>{{1, 1}, {1, 2}});
+  REQUIRE(m.status == FindStatus::ok);
+  REQUIRE(m.hits == std::vector<ByteRange>{{1, 1}, {1, 2}});
   CHECK(replace_one(doc, ByteRange{1, 1}, "(?=b)|b", "X", opt).has_value());
   CHECK(replace_one(doc, ByteRange{1, 2}, "(?=b)|b", "X", opt).has_value());
   const auto r = replace_all(doc, "(?=b)|b", "X", opt);
-  REQUIRE(r.has_value());
-  apply(doc, *r);
+  REQUIRE(r.command.has_value());
+  apply(doc, *r.command);
   CHECK(doc.text() == "aXX");
 }
 
@@ -369,12 +372,13 @@ void run_on_small_stack(void (*fn)(void*), void* arg) {
 
 struct LongLineRun {
   const Document* doc;
-  std::optional<std::vector<ByteRange>> any;      
-  std::optional<std::vector<ByteRange>> none;     
-  std::optional<std::vector<ByteRange>> backtrack;  
-  std::optional<std::vector<ByteRange>> group;    
-  std::optional<CommandResult> replaced;          
-  std::optional<CommandResult> replaced_none;     
+  FindResult any;                  
+  FindResult none;                 
+  FindResult backtrack;            
+  FindResult group;                
+  ReplaceAllResult replaced;       
+  ReplaceAllResult replaced_none;  
+  ReplaceAllResult replaced_limit;  
 };
 
 void long_line_run(void* p) {
@@ -387,18 +391,24 @@ void long_line_run(void* p) {
   run->group = find_all(*run->doc, "(a|b)*", opt);
   run->replaced = replace_all(*run->doc, "[^x]*", "y", opt);
   run->replaced_none = replace_all(*run->doc, "(a|b)*c", "y", opt);
+  run->replaced_limit = replace_all(*run->doc, "(a*)*[bc]", "y", opt);
 }
 
 void check_long_line_run(const LongLineRun& run, std::size_t size) {
-  REQUIRE(run.any.has_value());
-  CHECK(*run.any == std::vector<ByteRange>{{0, size}});
-  REQUIRE(run.none.has_value());
-  CHECK(run.none->empty());
-  CHECK_FALSE(run.backtrack.has_value());  
-  CHECK_FALSE(run.group.has_value());      
-  REQUIRE(run.replaced.has_value());
-  CHECK(run.replaced->edits.size() == 1);
-  CHECK_FALSE(run.replaced_none.has_value());
+  REQUIRE(run.any.status == FindStatus::ok);
+  CHECK(run.any.hits == std::vector<ByteRange>{{0, size}});
+  REQUIRE(run.none.status == FindStatus::ok);
+  CHECK(run.none.hits.empty());
+  CHECK(run.backtrack.status == FindStatus::limit_hit);  
+  CHECK(run.backtrack.hits.empty());
+  CHECK(run.group.status == FindStatus::limit_hit);  
+  CHECK(run.group.hits.empty());
+  REQUIRE(run.replaced.command.has_value());
+  CHECK(run.replaced.command->edits.size() == 1);
+  CHECK(run.replaced_none.status == FindStatus::ok);
+  CHECK_FALSE(run.replaced_none.command.has_value());
+  CHECK(run.replaced_limit.status == FindStatus::limit_hit);
+  CHECK_FALSE(run.replaced_limit.command.has_value());
 }
 
 }  
@@ -406,10 +416,10 @@ void check_long_line_run(const LongLineRun& run, std::size_t size) {
 TEST_CASE("find: regex over a 4 MiB line on the main thread and a 128 KiB stack", "[find]") {
   const std::size_t size = 4 * 1024 * 1024;
   const Document doc(std::string(size, 'a'));
-  LongLineRun main_run{&doc, {}, {}, {}, {}, {}, {}};
+  LongLineRun main_run{&doc, {}, {}, {}, {}, {}, {}, {}};
   long_line_run(&main_run);
   check_long_line_run(main_run, size);
-  LongLineRun thread_run{&doc, {}, {}, {}, {}, {}, {}};
+  LongLineRun thread_run{&doc, {}, {}, {}, {}, {}, {}, {}};
   run_on_small_stack(long_line_run, &thread_run);
   check_long_line_run(thread_run, size);
 }
@@ -434,19 +444,20 @@ TEST_CASE("commands: property check of find and replace over random documents", 
 
     Document doc(text);
     const auto all = find_all(doc, pattern, opt);
-    if (!all) continue;  
-    for (const ByteRange& m : *all) {
+    REQUIRE(all.status == FindStatus::ok);
+    for (const ByteRange& m : all.hits) {
       REQUIRE(m.start <= m.end);
       REQUIRE(m.end <= text.size());
     }
     const auto r = replace_all(doc, pattern, "X", opt);
-    if (!r) continue;  
+    REQUIRE(r.status == FindStatus::ok);
+    if (!r.command) continue;  
     INFO("text: " << text << " pattern: " << pattern);
     doc.begin();
-    for (const Edit& e : r->edits) REQUIRE_NOTHROW(doc.apply(e));
+    for (const Edit& e : r.command->edits) REQUIRE_NOTHROW(doc.apply(e));
     doc.commit();
-    REQUIRE(r->selection.cursor <= doc.size());
-    REQUIRE(r->selection.anchor <= doc.size());
+    REQUIRE(r.command->selection.cursor <= doc.size());
+    REQUIRE(r.command->selection.anchor <= doc.size());
     REQUIRE_FALSE(doc.tree().validate(doc.size()).has_value());
     doc.undo();
     REQUIRE(doc.text() == text);

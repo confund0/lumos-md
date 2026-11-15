@@ -1089,7 +1089,7 @@ using KindCounts = std::array<long, node_kind_count>;
 KindCounts kind_counts(const SyntaxTree& tree) {
   KindCounts c{};
   for (const Node& n : tree.nodes()) {
-    if (n.kind != NodeKind::text) ++c[static_cast<std::size_t>(n.kind)];
+    if (n.kind != NodeKind::text && n.kind != NodeKind::block_continuation) ++c[static_cast<std::size_t>(n.kind)];
   }
   return c;
 }

@@ -92,6 +92,10 @@ StyleTable StyleTable::make_default(const QFont& base, const QPalette& palette) 
   const QColor highlight = palette.color(QPalette::Active, QPalette::Highlight);
   t.find_hit.setBackground(mix(highlight, back, 0.6));
   t.find_hit_current.setBackground(mix(highlight, back, 0.25));
+
+  t.image_pending.setForeground(palette.color(QPalette::Active, QPalette::PlaceholderText));
+  t.image_failed = t.image_pending;
+  t.image_failed.setFontStrikeOut(true);
   return t;
 }
 

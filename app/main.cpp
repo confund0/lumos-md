@@ -21,7 +21,7 @@ int main(int argc, char** argv) {
   parser.addHelpOption();
   const QCommandLineOption debug("debug", "Write debug log lines, also to stderr.");
   parser.addOption(debug);
-  parser.addPositionalArgument("file", "Markdown file to open.", "[file]");
+  parser.addPositionalArgument("file", "Markdown files to open, each in its own tab.", "[file...]");
   parser.process(app);
 
   const AppPaths paths = find_app_paths();
@@ -32,9 +32,13 @@ int main(int argc, char** argv) {
              {{"pid", std::to_string(QCoreApplication::applicationPid())},
               {"debug", parser.isSet(debug) ? "flag" : debug_setting ? "setting" : "off"}});
   log_app_paths(paths);
-  MainWindow window(paths.settings_file());
+  MainWindow window(paths.settings_file(), paths.open_tabs_file());
   const QStringList files = parser.positionalArguments();
-  if (!files.isEmpty()) window.load(files.first());
+  if (files.isEmpty()) {
+    window.restore_tabs();
+  } else {
+    for (const QString& file : files) window.open_file(file);
+  }
   window.show();
   const int code = QApplication::exec();
   uninstall_log();

@@ -57,5 +57,7 @@ class FindBar : public QWidget {
   QToolButton* close_ = nullptr;
 
   std::vector<lumos::ByteRange> matches_;
+  std::optional<lumos::FindStatus> status_;
   std::optional<std::size_t> current_;
+  std::optional<std::size_t> replaced_;
 };

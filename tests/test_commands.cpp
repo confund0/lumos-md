@@ -530,6 +530,8 @@ TEST_CASE("commands: insert a link") {
   CHECK(run(link_cmd("a]b", "u"), "|") == "[a\\]b](u)|");
   CHECK(run(link_cmd("[x] y", "u"), "|") == "[[x] y](u)|");
   CHECK(run(link_cmd("**a**", "u"), "^**a**|") == "[**a**](u)|");
+  CHECK(run(link_cmd("b", "v"), "[a](u)x y\n| [x](y)") == "[a](u)x y\n[b](v)| [x](y)");
+  CHECK(run(link_cmd("b", "v"), "- a\n|  b") == "- a\n[b](v)|  b");
 }
 
 TEST_CASE("commands: insert a link does not apply here") {
@@ -550,6 +552,7 @@ TEST_CASE("commands: insert an image") {
   CHECK(run(image_cmd("a]b", "u"), "|") == "![a\\]b](u)|");
   CHECK(run(image_cmd("t", "u"), "Above.\n|\nBelow.") == "Above.\n![t](u)|\nBelow.");
   CHECK(run(image_cmd("t", "u"), "> a\n> |") == "> a\n> ![t](u)|");
+  CHECK(run(image_cmd("t", "u"), "x y\n| z") == "x y\n![t](u)| z");
   CHECK(run(image_cmd("t", "u"), "[a |](v)") == "[a ![t](u)|](v)");
 }
 

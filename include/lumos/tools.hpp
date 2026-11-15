@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -46,5 +47,7 @@ struct Properties {
 UrlForm url_form(std::string_view url) noexcept;
 
 Properties properties(const Document& document, const PropertiesOptions& options = {});
+
+std::optional<LinkTarget> link_at(const Document& document, std::size_t offset);
 
 }  
