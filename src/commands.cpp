@@ -41,6 +41,8 @@ std::optional<Context> make_context(const Document& doc, NodeId id) {
     c.after = c.from + 1 < t.size() && t[c.from + 1] == ' ' ? " " : "";
     c.mark_end = c.from + 1;
     c.to = c.mark_end + c.after.size();
+    c.from_col = column_of(t, c.from);
+    c.to_col = column_of(t, c.to);
     return c;
   }
   NodeId marker = no_node;
@@ -75,6 +77,8 @@ std::optional<Context> make_context(const Document& doc, NodeId id) {
   if (spaces >= 5) spaces = 1;
   c.after.assign(spaces, ' ');
   c.to = i + spaces;
+  c.from_col = column_of(t, c.from);
+  c.to_col = column_of(t, c.to);
   return c;
 }
 
@@ -108,16 +112,63 @@ std::string quote_prefix(const std::vector<Context>& ctx) {
   return r;
 }
 
-std::string continuation_prefix(const std::vector<Context>& ctx) {
-  std::string r;
-  for (std::size_t i = 0; i < ctx.size(); ++i) {
-    if (r.size() < ctx[i].from) r.append(ctx[i].from - r.size(), ' ');
-    const bool last = i + 1 == ctx.size();
-    std::optional<std::size_t> width;
-    if (!last) width = ctx[i + 1].from > r.size() ? ctx[i + 1].from - r.size() : 0;
-    r += ctx[i].blank(width);
-    if (last && !ctx[i].quote && ctx[i].after.empty()) r += ' ';
+namespace {
+
+std::size_t next_column(char c, std::size_t col) { return c == '\t' ? col + 4 - col % 4 : col + 1; }
+
+}  
+
+std::size_t column_of(std::string_view t, std::size_t i) {
+  std::size_t col = 0;
+  for (std::size_t j = 0; j < i && j < t.size(); ++j) col = next_column(t[j], col);
+  return col;
+}
+
+std::size_t byte_at_column(std::string_view t, std::size_t col) {
+  std::size_t c = 0;
+  std::size_t i = 0;
+  for (; i < t.size(); ++i) {
+    const std::size_t next = next_column(t[i], c);
+    if (next > col) break;
+    c = next;
   }
+  return i;
+}
+
+void indent_to(std::string& out, std::size_t col, std::string_view ref) {
+  std::size_t c = column_of(out, out.size());
+  bool tabs = false;
+  if (out.size() <= ref.size() && column_of(ref, out.size()) == c) {
+    for (std::size_t i = out.size(); i < ref.size() && is_space(ref[i]); ++i) tabs = tabs || ref[i] == '\t';
+  }
+  while (tabs && next_column('\t', c) <= col) {
+    out += '\t';
+    c = next_column('\t', c);
+  }
+  if (c < col) out.append(col - c, ' ');
+}
+
+std::string line_prefix(const std::vector<Context>& ctx, std::size_t n, bool marker, bool trailing,
+                        std::string_view ref) {
+  std::string r;
+  for (std::size_t i = 0; i < n; ++i) {
+    const Context& c = ctx[i];
+    const bool last = i + 1 == n;
+    if (!c.quote && !last) continue;
+    indent_to(r, c.from_col, ref);
+    if (last && marker) return r + c.marker();
+    const std::size_t at = column_of(r, r.size());
+    if (c.quote) r += '>';
+    if (!last) continue;  
+    indent_to(r, at + (c.to_col - c.from_col) - c.after.size(), ref);
+    if (trailing) r += c.after;
+  }
+  return r;
+}
+
+std::string continuation_prefix(const std::vector<Context>& ctx) {
+  std::string r = line_prefix(ctx, ctx.size(), false, true, {});
+  if (!ctx.empty() && !ctx.back().quote && ctx.back().after.empty()) r += ' ';
   return r;
 }
 
@@ -350,7 +401,7 @@ std::vector<Context> empty_line_contexts(const Document& doc, std::size_t line_n
   while (above > 0 && all_space(line_text(doc.buffer(), above - 1).text)) --above;
   if (above == 0) return ctx;
   for (const Context& c : contexts_at_line(doc, above - 1)) {
-    if (c.quote || c.to > lt.text.size()) break;
+    if (c.quote || c.to_col > column_of(lt.text, lt.text.size())) break;
     ctx.push_back(c);
   }
   return ctx;
@@ -360,8 +411,10 @@ std::string blank_line_pad(const Document& doc, std::size_t line) {
   const LineText lt = line_text(doc.buffer(), line);
   if (!all_space(lt.text)) return {};
   const std::string prefix = continuation_prefix(empty_line_contexts(doc, line, lt));
-  if (!all_space(prefix) || prefix.size() <= lt.text.size()) return {};
-  return prefix.substr(lt.text.size());
+  const std::size_t have = column_of(lt.text, lt.text.size());
+  const std::size_t want = column_of(prefix, prefix.size());
+  if (!all_space(prefix) || want <= have) return {};
+  return std::string(want - have, ' ');
 }
 
 bool node_starts_at(const Document& doc, const std::vector<Edit>& ascending, std::size_t node_start, NodeKind k,
@@ -430,6 +483,32 @@ CommandResult joined(const Document& doc, std::vector<Edit> ascending, Selection
   return r;
 }
 
+std::size_t prefix_run(const std::string& t) {
+  std::size_t i = 0;
+  while (i < t.size() && (is_space(t[i]) || t[i] == '>')) ++i;
+  return i;
+}
+
+std::size_t moved_text_at(const std::string& t, std::size_t col) {
+  const std::size_t run = prefix_run(t);
+  std::size_t at = std::min(byte_at_column(t, col), run);
+  while (at < run && is_space(t[at])) ++at;
+  return at;
+}
+
+void shift_at(const LineText& line, std::size_t at, std::ptrdiff_t shift, std::vector<Edit>& edits,
+              std::optional<std::string_view> ref = std::nullopt) {
+  const std::string& t = line.text;
+  std::size_t ws = at;
+  while (ws > 0 && is_space(t[ws - 1])) --ws;
+  const auto c0 = static_cast<std::ptrdiff_t>(column_of(t, ws));
+  const std::ptrdiff_t col = std::max(c0, static_cast<std::ptrdiff_t>(column_of(t, at)) + shift);
+  std::string out = t.substr(0, ws);
+  indent_to(out, static_cast<std::size_t>(col), ref.value_or(t));
+  if (std::string_view(out).substr(ws) == std::string_view(t).substr(ws, at - ws)) return;
+  edits.push_back(Edit{line.start + ws, at - ws, out.substr(ws)});
+}
+
 void replace_marker(const Document& doc, const Context& c, std::string mark, std::vector<Edit>& edits) {
   const Buffer& buf = doc.buffer();
   const std::size_t first = first_line_of(doc, c.node);
@@ -439,14 +518,8 @@ void replace_marker(const Document& doc, const Context& c, std::string mark, std
   if (shift == 0) return;
   for (std::size_t l = first + 1, last = last_line_of(doc, c.node); l <= last; ++l) {
     const LineText line = line_text(buf, l);
-    if (all_space(line.text) || line.text.size() < c.from) continue;
-    if (shift > 0) {
-      edits.push_back(Edit{line.start + c.from, 0, std::string(static_cast<std::size_t>(shift), ' ')});
-    } else {
-      std::size_t n = 0;
-      while (n < static_cast<std::size_t>(-shift) && c.from + n < line.text.size() && line.text[c.from + n] == ' ') ++n;
-      if (n > 0) edits.push_back(Edit{line.start + c.from, n, {}});
-    }
+    if (all_space(line.text)) continue;
+    shift_at(line, moved_text_at(line.text, c.from_col), shift, edits);
   }
 }
 
@@ -512,23 +585,25 @@ std::optional<CommandResult> insert_newline(const Document& doc, Selection sel, 
   std::vector<Context> ctx = contexts_at(doc, node_before(doc, pos), &code);
   if (code != no_node) return code_newline(doc, pos, ctx, newline, "enter");
 
-  const std::size_t col = pos - line.start;
-  while (!ctx.empty() && ctx.back().from > col) ctx.pop_back();
+  const std::size_t col = column_of(line.text, pos - line.start);
+  while (!ctx.empty() && ctx.back().from_col > col) ctx.pop_back();
   if (ctx.empty()) return std::nullopt;
   const Context& inner = ctx.back();
-  if (inner.to - inner.after.size() > col) return std::nullopt;
-  const bool empty_line =
-      col >= inner.to - inner.after.size() && all_space(std::string_view(line.text).substr(std::min(inner.to, line.text.size())));
+  if (inner.to_col - inner.after.size() > col) return std::nullopt;
+  const bool empty_line = all_space(std::string_view(line.text).substr(byte_at_column(line.text, inner.to_col)));
 
   if (!inner.quote && empty_line) {
     const Context* next = ctx.size() > 1 ? &ctx[ctx.size() - 2] : nullptr;
     std::size_t del_to = line.start;
     std::string insert;
-    if (next && !next->quote) {
-      del_to += next->from;
-      insert = next->marker();
-    } else if (next) {
-      del_to += next->to;
+    if (next) {
+      const std::size_t target = next->quote ? next->to_col : next->from_col;
+      const std::size_t keep = byte_at_column(line.text, target);
+      std::string kept = line.text.substr(0, keep);
+      indent_to(kept, target, line.text);
+      insert = kept.substr(keep);
+      if (!next->quote) insert += next->marker();
+      del_to += keep;
     }
     std::vector<Edit> edits = {Edit{del_to, pos - del_to, std::move(insert)}};
     if (next && next->ordered) renumber_after(doc, next->node, next->number, edits);
@@ -554,32 +629,14 @@ std::optional<CommandResult> insert_newline(const Document& doc, Selection sel, 
   while (lead < line.text.size() && std::string_view(" \t0123456789.)-+*>").find(line.text[lead]) != std::string_view::npos)
     ++lead;
   std::string insert;
-  if (!continued || lead >= inner.to) {
-    for (std::size_t i = 0; i < ctx.size(); ++i) {
-      const bool last = i + 1 == ctx.size();
-      if (insert.size() < ctx[i].from) insert.append(ctx[i].from - insert.size(), ' ');
-      if (last && !continued) {
-        insert += ctx[i].marker();
-      } else {
-        std::optional<std::size_t> width;
-        if (!last) width = ctx[i + 1].from > insert.size() ? ctx[i + 1].from - insert.size() : 0;
-        insert += ctx[i].blank(width);
-      }
-    }
+  if (!continued || column_of(line.text, lead) >= inner.to_col) {
+    insert = line_prefix(ctx, ctx.size(), !continued, true, line.text);
   }
   std::size_t from = pos;
   while (from > line.start && is_space(line.text[from - 1 - line.start])) --from;
   std::string text(newline);
   if (!inner.quote && !doc.tree()[inner.list].tight) {
-    std::string blank;
-    for (std::size_t i = 0; i + 1 < ctx.size(); ++i) {
-      const bool last = i + 2 == ctx.size();
-      if (blank.size() < ctx[i].from) blank.append(ctx[i].from - blank.size(), ' ');
-      std::optional<std::size_t> width;
-      if (!last) width = ctx[i + 1].from > blank.size() ? ctx[i + 1].from - blank.size() : 0;
-      blank += ctx[i].blank(width, !last);
-    }
-    text += blank;
+    text += line_prefix(ctx, ctx.size() - 1, false, false, line.text);
     text += newline;
   }
   text += insert;
@@ -632,23 +689,24 @@ NodeId previous_item(const SyntaxTree& tree, NodeId item) {
   return no_node;
 }
 
+NodeId last_list_item(const SyntaxTree& tree, NodeId item) {
+  NodeId list = no_node;
+  for (NodeId child : tree.children(item)) {
+    if (leaf_block(tree[child].kind) || container_block(tree[child].kind)) list = child;
+  }
+  if (list == no_node || tree[list].kind != NodeKind::list) return no_node;
+  NodeId last = no_node;
+  for (NodeId child : tree.children(list)) {
+    if (tree[child].kind == NodeKind::list_item) last = child;
+  }
+  return last;
+}
+
 NodeId parent_item(const SyntaxTree& tree, NodeId item) {
   const NodeId list = tree[item].parent;
   if (list == no_node) return no_node;
   const NodeId up = tree[list].parent;
   return up != no_node && tree[up].kind == NodeKind::list_item ? up : no_node;
-}
-
-std::size_t prefix_run(const std::string& t) {
-  std::size_t i = 0;
-  while (i < t.size() && (is_space(t[i]) || t[i] == '>')) ++i;
-  return i;
-}
-
-std::size_t spaces_before(const std::string& t, std::size_t col) {
-  std::size_t n = 0;
-  while (n < col && t[col - n - 1] == ' ') ++n;
-  return n;
 }
 
 }  
@@ -666,9 +724,26 @@ std::optional<CommandResult> indent_list(const Document& doc, Selection sel) {
       log_decision("indent", "first_item", 0);
       return CommandResult{{}, sel};
     }
-    const std::size_t col = self->from;
-    const std::size_t width = above->to > col ? above->to - col : 1;
-    const std::string pad(width, ' ');
+    const std::size_t col = self->from_col;
+    std::size_t target = above->to_col;
+    std::optional<LineText> ref;
+    if (const NodeId last = last_list_item(tree, prev); last != no_node) {
+      if (const auto c = make_context(doc, last); c && c->from_col >= target) {
+        target = c->from_col;
+        ref = line_text(doc.buffer(), first_line_of(doc, last));
+      }
+    }
+    if (!ref) {
+      for (const auto& [id, c] : {std::pair{item, &*self}, std::pair{prev, &*above}}) {
+        LineText lt = line_text(doc.buffer(), first_line_of(doc, id));
+        if (lt.text.find('\t') < c->from) {
+          target = (target + 3) / 4 * 4;
+          if (id != item) ref = std::move(lt);
+          break;
+        }
+      }
+    }
+    const std::size_t width = target > col ? target - col : 1;
     const bool to_one = self->ordered && self->number != 1;
     const std::size_t mark_width = self->mark_end - self->from;
     const std::size_t lost = to_one ? mark_width - 1 - self->bullet.size() : 0;
@@ -678,13 +753,18 @@ std::optional<CommandResult> indent_list(const Document& doc, Selection sel) {
       const std::size_t run = prefix_run(line.text);
       if (l != first && run == line.text.size()) continue;  
       if (l == first) {
-        edits.push_back(to_one ? Edit{line.start + col, mark_width, pad + "1" + self->bullet}
-                               : Edit{line.start + col, 0, pad});
-      } else if (width >= lost) {
-        edits.push_back(Edit{line.start + std::min(run, col), 0, std::string(width - lost, ' ')});
+        const std::size_t n = edits.size();
+        shift_at(line, self->from, static_cast<std::ptrdiff_t>(width), edits,
+                 ref ? std::optional<std::string_view>(ref->text) : std::nullopt);
+        if (to_one) {
+          if (edits.size() == n) edits.push_back(Edit{line.start + self->from, 0, {}});
+          Edit& e = edits.back();
+          e.removed += mark_width;
+          e.inserted += "1" + self->bullet;
+        }
       } else {
-        const std::size_t n = std::min(lost - width, spaces_before(line.text, run));
-        if (n > 0) edits.push_back(Edit{line.start + run - n, n, {}});
+        shift_at(line, moved_text_at(line.text, col),
+                 static_cast<std::ptrdiff_t>(width) - static_cast<std::ptrdiff_t>(lost), edits);
       }
     }
   }
@@ -700,15 +780,17 @@ std::optional<CommandResult> outdent_list(const Document& doc, Selection sel) {
   for (NodeId item : items) {
     const auto self = make_context(doc, item);
     if (!self) continue;
-    const std::size_t col = self->from;
-    const LineText first_text = line_text(doc.buffer(), first_line_of(doc, item));
+    const std::size_t col = self->from_col;
+    const std::string first_text = line_text(doc.buffer(), first_line_of(doc, item)).text;
     std::size_t width = 0;
     const NodeId parent = parent_item(tree, item);
     if (parent != no_node) {
       const auto up = make_context(doc, parent);
-      if (up && up->from < col) width = col - up->from;
+      if (up && up->from_col < col) width = col - up->from_col;
     } else {
-      width = spaces_before(first_text.text, col);
+      std::size_t ws = self->from;
+      while (ws > 0 && is_space(first_text[ws - 1])) --ws;
+      width = col - column_of(first_text, ws);
     }
     if (width == 0) continue;
     const std::size_t first = first_line_of(doc, item);
@@ -716,9 +798,8 @@ std::optional<CommandResult> outdent_list(const Document& doc, Selection sel) {
       const LineText line = line_text(doc.buffer(), l);
       const std::size_t run = prefix_run(line.text);
       if (l != first && run == line.text.size()) continue;  
-      const std::size_t at = l == first ? col : run;
-      const std::size_t n = std::min(width, spaces_before(line.text, at));
-      if (n > 0) edits.push_back(Edit{line.start + at - n, n, {}});
+      const std::size_t at = l == first ? self->from : moved_text_at(line.text, col);
+      shift_at(line, at, -static_cast<std::ptrdiff_t>(width), edits);
     }
     NodeId next = tree[item].next_sibling;
     while (next != no_node && tree[next].kind != NodeKind::list_item) next = tree[next].next_sibling;
@@ -739,8 +820,9 @@ std::optional<CommandResult> delete_markup_backward(const Document& doc, Selecti
   if (code != no_node || ctx.empty()) return std::nullopt;
   const Context& inner = ctx.back();
   const std::size_t col = pos - line.start;
-  const std::size_t space_end = inner.to - inner.after.size() + (inner.after.empty() ? 0 : 1);
   const std::string_view t = line.text;
+  const std::size_t space_end =
+      byte_at_column(t, inner.to_col - inner.after.size() + (inner.after.empty() ? 0 : 1));
   if (col > space_end && all_space(t.substr(space_end, col - space_end))) {
     log_decision("backspace", "spaces", 1);
     return at_cursor({Edit{line.start + space_end, col - space_end, {}}}, line.start + space_end);
@@ -748,8 +830,8 @@ std::optional<CommandResult> delete_markup_backward(const Document& doc, Selecti
   if (col != space_end) return std::nullopt;
   const bool item = !inner.quote;
   const Node& n = doc.tree()[inner.node];
-  if (item && line.start > n.start && !all_space(t.substr(0, std::min(inner.to, t.size())))) return std::nullopt;
-  const std::size_t start = line.start + inner.from;
+  if (item && line.start > n.start && !all_space(t.substr(0, byte_at_column(t, inner.to_col)))) return std::nullopt;
+  const std::size_t start = line.start + byte_at_column(t, inner.from_col);
   if (item && doc.tree()[inner.list].start < n.start && line.start <= n.start &&
       !all_space(t.substr(inner.from, inner.to - inner.from))) {
     std::string insert = inner.blank(inner.to - inner.from);
@@ -1025,22 +1107,18 @@ std::optional<CommandResult> insert_line_break(const Document& doc, Selection se
     }
   }
 
-  std::string prefix;
-  for (std::size_t i = 0; i < ctx.size(); ++i) {
-    Context c = ctx[i];
-    if (!c.quote) {
-      const std::string first = line_text(buf, first_line_of(doc, c.node)).text;
-      std::size_t n = 0;
-      while (c.mark_end + n < first.size() && first[c.mark_end + n] == ' ') ++n;
-      if (n == 0 || n >= 5 || c.mark_end + n >= first.size()) n = 1;
-      c.to = c.mark_end + n;
-      c.after.assign(n, ' ');
-    }
-    if (prefix.size() < c.from) prefix.append(c.from - prefix.size(), ' ');
-    std::optional<std::size_t> width;
-    if (i + 1 < ctx.size()) width = ctx[i + 1].from > prefix.size() ? ctx[i + 1].from - prefix.size() : 0;
-    prefix += c.blank(width);
+  std::vector<Context> content = ctx;
+  for (Context& c : content) {
+    if (c.quote) continue;
+    const std::string first = line_text(buf, first_line_of(doc, c.node)).text;
+    std::size_t n = 0;
+    while (c.mark_end + n < first.size() && first[c.mark_end + n] == ' ') ++n;
+    if (n == 0 || n >= 5 || c.mark_end + n >= first.size()) n = 1;
+    c.to = c.mark_end + n;
+    c.to_col = column_of(first, c.mark_end) + n;
+    c.after.assign(n, ' ');
   }
+  const std::string prefix = line_prefix(content, content.size(), false, true, line.text);
   if (prefix.empty() && !hard) return std::nullopt;
 
   std::string text = hard ? "\\" : "";
@@ -1574,15 +1652,13 @@ std::optional<CommandResult> list_off(const Document& doc, Selection sel) {
   for (const NodeId item : items) {
     const auto self = make_context(doc, item);
     if (!self) continue;
-    const std::size_t width = self->to - self->from;
     const std::size_t first = first_line_of(doc, item);
-    edits.push_back(Edit{doc.buffer().line_start(first) + self->from, width, {}});
+    edits.push_back(Edit{doc.buffer().line_start(first) + self->from, self->to - self->from, {}});
+    const auto width = static_cast<std::ptrdiff_t>(self->to_col - self->from_col);
     for (std::size_t l = first + 1, last = last_line_of(doc, item); l <= last; ++l) {
       const LineText line = line_text(doc.buffer(), l);
-      const std::size_t run = prefix_run(line.text);
-      if (run == line.text.size()) continue;  
-      const std::size_t n = std::min(width, spaces_before(line.text, run));
-      if (n > 0) edits.push_back(Edit{line.start + run - n, n, {}});
+      if (prefix_run(line.text) == line.text.size()) continue;  
+      shift_at(line, moved_text_at(line.text, self->from_col), -width, edits);
     }
   }
   if (edits.empty()) return std::nullopt;

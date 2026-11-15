@@ -8,7 +8,8 @@ lumos contains no third-party code. It contains data from these sources.
 from `CaseFolding.txt` 17.0.0 of the Unicode Character Database, and from
 the Unicode 15.0.0 general categories in Python's `unicodedata`.
 
-License: Unicode License v3 (https://www.unicode.org/license.txt).
+License: Unicode License v3 (https://www.unicode.org/license.txt), full
+text in `LICENSES/Unicode-3.0.txt`.
 Copyright © 1991-2025 Unicode, Inc.
 
 ## HTML entity names
@@ -19,7 +20,8 @@ the WHATWG list of HTML named character references
 `html.entities.html5` holds it.
 
 License: Creative Commons Attribution 4.0 International
-(https://creativecommons.org/licenses/by/4.0/).
+(https://creativecommons.org/licenses/by/4.0/), full text in
+`LICENSES/CC-BY-4.0.txt`.
 Copyright © WHATWG (Apple, Google, Mozilla, Microsoft).
 
 ## Spec test files

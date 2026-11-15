@@ -60,6 +60,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q minisign
+          sh packaging/release-notes.sh > "$RUNNER_TEMP/notes.md"
           cp keys/lumos-md.rsa.pub keys/minisign.pub dist/
           cd dist
           sha256sum -- * > SHA256SUMS
@@ -67,4 +68,4 @@ jobs:
           printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -s "$RUNNER_TEMP/minisign.key" -m SHA256SUMS -t "lumos-md $GITHUB_REF_NAME"
           rm -f "$RUNNER_TEMP/minisign.key"
           minisign -V -m SHA256SUMS -p minisign.pub
-          gh release create "$GITHUB_REF_NAME" --draft --title "lumos-md $GITHUB_REF_NAME" --notes "" -- *
+          gh release create "$GITHUB_REF_NAME" --draft --title "lumos-md $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" -- *

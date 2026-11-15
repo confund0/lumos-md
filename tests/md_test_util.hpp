@@ -127,12 +127,10 @@ using NodeKey = std::tuple<lumos::NodeKind, std::size_t, std::size_t, std::size_
 
 inline std::multiset<NodeKey> nodes_outside(const lumos::SyntaxTree& t,
                                              std::span<const std::pair<std::size_t, std::size_t>> ranges,
-                                             std::ptrdiff_t shift_after, std::size_t shift_from,
-                                             const std::set<std::size_t>& ancestor_starts) {
+                                             std::ptrdiff_t shift_after, std::size_t shift_from) {
   std::multiset<NodeKey> out;
   for (lumos::NodeId i = 1; i < t.size(); ++i) {
     const lumos::Node& n = t.node(i);
-    if (ancestor_starts.count(n.start)) continue;
     bool outside = true;
     for (const auto& [from, to] : ranges) {
       const bool before = n.end <= from && !(n.start == n.end && n.start == from);
@@ -179,23 +177,8 @@ inline std::string check_locality(const lumos::SyntaxTree& old_tree, const lumos
     }
   }
 
-  std::set<std::size_t> ancestor_starts;
-  if (has_main) {
-    const lumos::TextRegion& r = *main_it;
-    if (r.start > 0) {
-      for (lumos::NodeId cur = old_tree.node_at(r.start - 1); cur != lumos::no_node; cur = old_tree.node(cur).parent)
-        ancestor_starts.insert(old_tree.node(cur).start);
-    }
-    lumos::NodeId last_closed_before_r = lumos::no_node;
-    for (lumos::NodeId i = 1; i < old_tree.size(); ++i) {
-      if (old_tree.node(i).end <= r.start) last_closed_before_r = i;
-    }
-    for (lumos::NodeId cur = last_closed_before_r; cur != lumos::no_node; cur = old_tree.node(cur).parent)
-      ancestor_starts.insert(old_tree.node(cur).start);
-  }
-
-  const auto o1 = nodes_outside(old_tree, old_ranges, main_delta, main_old_end, ancestor_starts);
-  const auto o2 = nodes_outside(new_tree, new_ranges, 0, SIZE_MAX, ancestor_starts);
+  const auto o1 = nodes_outside(old_tree, old_ranges, main_delta, main_old_end);
+  const auto o2 = nodes_outside(new_tree, new_ranges, 0, SIZE_MAX);
   if (o1 == o2) return "";
   std::string out;
   for (const lumos::TextRegion& r : sorted)

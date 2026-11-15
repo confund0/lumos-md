@@ -28,9 +28,11 @@ LineText line_text(const Buffer& b, std::size_t line);
 struct Context {
   NodeId node = no_node;
   bool quote = false;
-  std::size_t from = 0;  
+  std::size_t from = 0;      
   std::size_t mark_end = 0;  
   std::size_t to = 0;        
+  std::size_t from_col = 0;  
+  std::size_t to_col = 0;    
   std::string after;         
   NodeId list = no_node;
   bool ordered = false;
@@ -38,15 +40,10 @@ struct Context {
   std::uint64_t number = 0;
   std::string task;        
 
-  std::string blank(std::optional<std::size_t> width, bool trailing = true) const {
+  std::string blank(std::size_t width) const {
     std::string r = quote ? ">" : "";
-    if (width) {
-      while (r.size() < *width) r += ' ';
-      return r;
-    }
-    const std::size_t used = r.size() + after.size();
-    if (to - from > used) r.append(to - from - used, ' ');
-    return trailing ? r + after : r;
+    while (r.size() < width) r += ' ';
+    return r;
   }
 
   std::string marker() const {
@@ -62,6 +59,15 @@ std::vector<Context> contexts_at(const Document& doc, NodeId id, NodeId* code);
 std::vector<Context> contexts_at_line(const Document& doc, std::size_t line);
 
 std::string quote_prefix(const std::vector<Context>& ctx);
+
+std::size_t column_of(std::string_view t, std::size_t i);
+
+std::size_t byte_at_column(std::string_view t, std::size_t col);
+
+void indent_to(std::string& out, std::size_t col, std::string_view ref);
+
+std::string line_prefix(const std::vector<Context>& ctx, std::size_t n, bool marker, bool trailing,
+                        std::string_view ref);
 
 std::string continuation_prefix(const std::vector<Context>& ctx);
 

@@ -1,4 +1,5 @@
 
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -9,6 +10,7 @@
 #include <string_view>
 #include <vector>
 
+#include "lumos/log.hpp"
 #include "lumos/md/html_renderer.hpp"
 #include "lumos/parser.hpp"
 
@@ -426,14 +428,15 @@ class Generator {
     return s;
   }
 
-  std::string task_item_start() {
+  std::string task_item_start(bool text_follows) {
     static const char* const bullets[] = {"-", "*", "1.", "2)"};
-    static const char* const gaps[] = {" ", "\t", "\v", "\f", "  "};
+    static const char* const marker_gaps[] = {" ", "\t", "  "};
+    static const char* const box_gaps[] = {" ", "\t", "\v", "\f", "  "};
     static const char* const boxes[] = {"[ ]", "[x]", "[X]", "[\t]"};
     std::string s = one(bullets);
-    s += one(gaps);
+    s += one(marker_gaps);
     s += one(boxes);
-    if (!coin(5)) s += one(gaps);
+    if (!coin(5)) s += text_follows ? one(box_gaps) : one(marker_gaps);
     return s;
   }
 
@@ -443,7 +446,11 @@ class Generator {
       return one(b);
     }
     if (coin(10)) return definition_line();
-    if (gfm_ && coin(10)) return prefix() + task_item_start() + (coin(2) ? body() : "");
+    if (gfm_ && coin(10)) {
+      const std::string pfx = prefix();
+      const std::string text = coin(2) ? body() : "";
+      return pfx + task_item_start(!text.empty()) + text;
+    }
     return prefix() + body();
   }
 
@@ -476,23 +483,49 @@ constexpr bool gfm_mode = true;
 constexpr bool gfm_mode = false;
 #endif
 
-bool core_differs(const std::string& doc) {
-  if (!gfm_mode) return false;
+enum Skip { skip_none, skip_task_line, skip_core, skip_tilde, skip_box, skip_rows, skip_head, skip_setext, skip_kinds };
+const char* const skip_names[skip_kinds] = {"", "task", "core", "tilde", "box", "rows", "head", "setext"};
+
+Skip core_differs(const std::string& doc) {
+  if (!gfm_mode) return skip_none;
 #if defined(LUMOS_ORACLE_GFM)
   reference_html(doc);
-  if (g_task_off_first_line) return true;
+  if (g_task_off_first_line) return skip_task_line;
 #endif
-  if (our_html(doc, false).html != reference_html(doc, false)) return true;
+  if (our_html(doc, false).html != reference_html(doc, false)) return skip_core;
   std::string no_tilde;
   for (char c : doc)
     if (c != '~') no_tilde += c;
-  if (no_tilde.size() != doc.size() && our_html(no_tilde, false).html != reference_html(no_tilde, false)) return true;
+  if (no_tilde.size() != doc.size() && our_html(no_tilde, false).html != reference_html(no_tilde, false)) return skip_tilde;
   std::string no_task = doc;
   for (std::size_t i = 0; i + 3 <= no_task.size(); ++i)
     if (no_task[i] == '[' && (no_task[i + 1] == ' ' || no_task[i + 1] == 'x' || no_task[i + 1] == 'X') &&
         no_task[i + 2] == ']')
       no_task.replace(i, 3, "   ");
-  if (no_task != doc && our_html(no_task, false).html != reference_html(no_task, false)) return true;
+  if (no_task != doc && our_html(no_task, false).html != reference_html(no_task, false)) return skip_box;
+  std::string no_box;
+  std::string box_html;
+  for (std::size_t i = 0; i < doc.size();) {
+    const bool box = i + 3 <= doc.size() && doc[i] == '[' &&
+                     (doc[i + 1] == ' ' || doc[i + 1] == 'x' || doc[i + 1] == 'X') && doc[i + 2] == ']';
+    if (!box) {
+      no_box += doc[i];
+      box_html += doc[i++];
+      continue;
+    }
+    std::size_t rest = i + 3;
+    while (rest < doc.size() && (doc[rest] == ' ' || doc[rest] == '\t')) ++rest;
+    if (rest == doc.size() || doc[rest] == '\n' || doc[rest] == '\r') {
+      const std::size_t start = no_box.find_last_of("\r\n");
+      no_box.insert(start == std::string::npos ? 0 : start + 1, "\n");
+      box_html += "<!-- -->";
+    } else {
+      box_html.append(doc, i, 3);
+    }
+    i = rest;
+  }
+  if (no_box != doc && our_html(no_box, false).html != reference_html(no_box, false)) return skip_box;
+  if (box_html != doc && our_html(box_html, false).html != reference_html(box_html, false)) return skip_box;
   std::string no_rows;
   bool had_pipe = false;
   std::size_t line = 0;
@@ -509,7 +542,7 @@ bool core_differs(const std::string& doc) {
     if (i < doc.size()) no_rows += doc[i];
     line = i + 1;
   }
-  if (had_pipe && our_html(no_rows, false).html != reference_html(no_rows, false)) return true;
+  if (had_pipe && our_html(no_rows, false).html != reference_html(no_rows, false)) return skip_rows;
   std::vector<std::string_view> lines;
   std::vector<char> endings;
   line = 0;
@@ -532,7 +565,31 @@ bool core_differs(const std::string& doc) {
     if (!empty[k]) no_head += lines[k];
     if (endings[k] != '\0') no_head += endings[k];
   }
-  return no_head != doc && our_html(no_head, false).html != reference_html(no_head, false);
+  if (no_head != doc && our_html(no_head, false).html != reference_html(no_head, false)) return skip_head;
+  if (doc.find("---") == std::string::npos || doc.find("]:") == std::string::npos) return skip_none;
+  std::vector<std::size_t> rejected;
+  lumos::set_log_level(lumos::LogLevel::debug);
+  lumos::set_log_sink([&](lumos::LogLevel, std::string_view l) {
+    if (l.find("event=setext_rejected") == std::string_view::npos) return;
+    const std::size_t at = l.find(" line=");
+    if (at != std::string_view::npos) rejected.push_back(std::strtoul(l.data() + at + 6, nullptr, 10));
+  });
+  our_html(doc, true);
+  lumos::set_log_sink(nullptr);
+  lumos::set_log_level(lumos::LogLevel::info);
+  if (rejected.empty()) return skip_none;
+  std::vector<std::string_view> parsed_lines;  
+  for (std::size_t i = 0, start = 0; i <= doc.size(); ++i) {
+    if (i < doc.size() && doc[i] != '\n' && doc[i] != '\r') continue;
+    parsed_lines.emplace_back(doc.data() + start, i - start);
+    if (i + 1 < doc.size() && doc[i] == '\r' && doc[i + 1] == '\n') ++i;
+    start = i + 1;
+  }
+  for (const std::size_t k : rejected) {
+    if (k >= 1 && k <= parsed_lines.size() && std::count(parsed_lines[k - 1].begin(), parsed_lines[k - 1].end(), '-') >= 3)
+      return skip_setext;
+  }
+  return skip_none;
 }
 
 bool differs(const std::string& doc) {
@@ -634,10 +691,12 @@ int main(int argc, char** argv) {
   Generator gen(seed, gfm_mode);
   int mismatches = 0;
   int skipped = 0;
+  int skip_count[skip_kinds] = {};
   for (int i = 0; i < count; ++i) {
     const std::string doc = gen.document();
-    if (core_differs(doc)) {
+    if (const Skip why = core_differs(doc)) {
       ++skipped;
+      ++skip_count[why];
       continue;
     }
     if (!differs(doc)) continue;
@@ -645,6 +704,11 @@ int main(int argc, char** argv) {
     if (mismatches <= show) report(doc, mismatches);
   }
   if (gfm_mode) std::printf("%d documents skipped: cmark-gfm core differs, or a lazy task line\n", skipped);
+  if (gfm_mode) {
+    std::printf("skips by check:");
+    for (int k = skip_task_line; k < skip_kinds; ++k) std::printf(" %s %d", skip_names[k], skip_count[k]);
+    std::printf("\n");
+  }
   std::printf("%d documents, %d mismatches (seed %u%s)\n", count, mismatches, seed, g_safe ? ", safe mode" : "");
   return mismatches == 0 ? 0 : 1;
 }

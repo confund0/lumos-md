@@ -1,11 +1,11 @@
 # Maintainer: confund0 <110197472+confund0@users.noreply.github.com>
 pkgname=lumos-md
-pkgver=0.1.3
+pkgver=0.1.4
 pkgrel=0
 pkgdesc="Markdown editor that keeps the source text as the only truth"
 url="https://github.com/confund0/lumos-md"
 arch="x86_64"
-license="AGPL-3.0-only"
+license="AGPL-3.0-only AND Unicode-3.0 AND CC-BY-4.0"
 subpackages="$pkgname-dbg $pkgname-doc"
 makedepends="cmake samurai pcre2-dev pkgconf qt6-qtbase-dev"
 checkdepends="catch2-3 font-dejavu"
@@ -29,6 +29,8 @@ check() {
 
 package() {
 	DESTDIR="$pkgdir" cmake --install build
+	install -Dm644 -t "$pkgdir"/usr/share/licenses/$pkgname \
+		LICENSE THIRD_PARTY.md LICENSES/Unicode-3.0.txt LICENSES/CC-BY-4.0.txt
 }
 
 sha512sums="

@@ -1,5 +1,6 @@
 #include "md/autolink.hpp"
 
+#include "md/scanners.hpp"
 #include "md/unicode.hpp"
 
 namespace lumos::md {
@@ -11,8 +12,6 @@ constexpr bool is_ascii_alpha(char c) noexcept { return (c >= 'a' && c <= 'z') |
 constexpr bool is_ascii_alnum(char c) noexcept { return is_ascii_alpha(c) || (c >= '0' && c <= '9'); }
 
 constexpr char to_lower_ascii(char c) noexcept { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; }
-
-constexpr bool is_cmark_space(char c) noexcept { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
 
 bool scheme_equals(std::string_view s, std::size_t start, std::size_t len, std::string_view scheme) noexcept {
   if (len != scheme.size()) return false;
@@ -119,7 +118,7 @@ std::size_t autolink_trim(std::string_view link) noexcept {
 std::size_t match_www(std::string_view s, std::size_t i) noexcept {
   if (i > 0) {
     const char prev = s[i - 1];
-    if (prev != '*' && prev != '_' && prev != '~' && prev != '(' && !is_cmark_space(prev)) return 0;
+    if (prev != '*' && prev != '_' && prev != '~' && prev != '(' && !is_gfm_space(prev)) return 0;
   }
 
   const std::string_view rest = s.substr(i);
@@ -128,7 +127,7 @@ std::size_t match_www(std::string_view s, std::size_t i) noexcept {
   std::size_t link_end = autolink_domain(rest, true);
   if (link_end == 0) return 0;
 
-  while (link_end < rest.size() && !is_cmark_space(rest[link_end]) && rest[link_end] != '<') ++link_end;
+  while (link_end < rest.size() && !is_gfm_space(rest[link_end]) && rest[link_end] != '<') ++link_end;
 
   return autolink_trim(rest.substr(0, link_end));
 }
@@ -152,7 +151,7 @@ AutolinkRange match_url(std::string_view s, std::size_t colon) noexcept {
   if (domain_len == 0) return {};
   link_end += domain_len;
 
-  while (colon + link_end < s.size() && !is_cmark_space(s[colon + link_end]) && s[colon + link_end] != '<') {
+  while (colon + link_end < s.size() && !is_gfm_space(s[colon + link_end]) && s[colon + link_end] != '<') {
     ++link_end;
   }
 

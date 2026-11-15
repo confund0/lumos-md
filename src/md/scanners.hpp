@@ -14,6 +14,8 @@ constexpr bool is_cmark_space(char c) noexcept {
   return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r';
 }
 
+constexpr bool is_gfm_space(char c) noexcept { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
+
 bool scan_thematic_break(std::string_view s, std::size_t* fail_at) noexcept;
 
 std::uint8_t scan_atx_heading_start(std::string_view s, std::size_t* content_start) noexcept;

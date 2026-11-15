@@ -80,6 +80,17 @@ TEST_CASE("commands: Enter continues a list item") {
   CHECK(run(enter_lf, "1. a\n   1. b|") == "1. a\n   1. b\n   2. |");
 }
 
+TEST_CASE("commands: Enter in a list indented with tabs") {
+  CHECK(run(enter_lf, "- one\n\t- two|") == "- one\n\t- two\n\t- |");
+  CHECK(run(enter_lf, "1. one\n\t1. two|\n\t2. three") == "1. one\n\t1. two\n\t2. |\n\t3. three");
+  CHECK(run(enter_lf, "- a\n\t- b\n\t\t- c|") == "- a\n\t- b\n\t\t- c\n\t\t- |");
+  CHECK(run(enter_lf, "- one\n\t- two\n\t  more|") == "- one\n\t- two\n\t  more\n\t  |");
+  CHECK(run(enter_lf, "> - a\n>\t- b|") == "> - a\n>\t- b\n>\t- |");
+  CHECK(run(enter_lf, "- a\n\t- b\n\t\t- c\n\t\t- |") == "- a\n\t- b\n\t\t- c\n\t- |");
+  CHECK(run(enter_lf, "- a\n\t- b\n\t- |") == "- a\n\t- b\n- |");
+  CHECK(run(enter_lf, "8. a|\n9. b\n\t- c") == "8. a\n9. |\n10. b\n\t - c");
+}
+
 TEST_CASE("commands: Enter continues a task item unchecked") {
   CHECK(run(enter_lf, "- [x] a|") == "- [x] a\n- [ ] |");
   CHECK(run(enter_lf, "- [ ] a|") == "- [ ] a\n- [ ] |");
@@ -260,6 +271,31 @@ TEST_CASE("commands: Shift+Tab outdents list items") {
   CHECK(run(outdent_list, "  - a|") == "- a|");
   CHECK(run(outdent_list, "> - a\n>   - b|") == "> - a\n> - b|");
   CHECK(run(outdent_list, "- a\n  - ^b\n  - c|") == "- a\n- ^b\n- c|");
+}
+
+TEST_CASE("commands: Tab and Shift+Tab in a list indented with tabs") {
+  CHECK(run(outdent_list, "- one\n\t- two|") == "- one\n- two|");
+  CHECK(run(outdent_list, "- one\n\t- two|\n\n\t  para in two") == "- one\n- two|\n\n  para in two");
+  CHECK(run(outdent_list, "- a\n\t- b\n\t\t- c|") == "- a\n\t- b\n\t- c|");
+  CHECK(run(outdent_list, "1. one\n\t1. two|") == "1. one\n1. two|");
+  CHECK(run(indent_list, "- one\n\t- two\n\t- three|") == "- one\n\t- two\n\t\t- three|");
+  CHECK(run(outdent_list, "- one\n\t- two\n\t\t- three|") == "- one\n\t- two\n\t- three|");
+  CHECK(run(indent_list, "1. one\n\t1. two\n\t2. three|\n\t\tmore") == "1. one\n\t1. two\n\t\t1. three|\n\t\t\tmore");
+  CHECK(run(indent_list, "> - one\n>\t- two\n>\t- three|") == "> - one\n>\t- two\n>\t\t- three|");
+  CHECK(run(indent_list, "- one\n  - two\n  - three|") == "- one\n  - two\n    - three|");
+  CHECK(run(indent_list, "- one\n- two|\n\t- three") == "- one\n  - two|\n\t  - three");
+  CHECK(run(outdent_list, "- one\n  - two|\n\t  - three") == "- one\n- two|\n\t- three");
+  CHECK(run(indent_list, "- one\n\t- two\n- three|") == "- one\n\t- two\n\t- three|");
+  CHECK(run(indent_list, "- one\n\t- two\n- three|\n\t- four") == "- one\n\t- two\n\t- three|\n\t\t- four");
+  CHECK(run(indent_list, "- one\n    - two\n- three|") == "- one\n    - two\n    - three|");
+  CHECK(run(indent_list, "> - one\n>\t- two\n> - three|") == "> - one\n>\t- two\n>\t- three|");
+  CHECK(run(indent_list, "- one\n\t- two\n\n  para\n- three|") == "- one\n\t- two\n\n  para\n  - three|");
+  CHECK(run(outdent_list, "- a\n  - b|\n\n    > q") == "- a\n- b|\n\n  > q");
+}
+
+TEST_CASE("commands: Shift+Enter and Backspace in a list indented with tabs") {
+  CHECK(run(break_lf, "- a\n\t- b|") == "- a\n\t- b\\\n\t  |");
+  CHECK(run(delete_markup_backward, "- a\n\t- b\n\t  |c") == "- a\n\t- b\n\t|c");
 }
 
 TEST_CASE("commands: Shift+Tab on a top level item changes nothing") {
@@ -743,7 +779,7 @@ std::string random_document(std::mt19937& rng) {
   static const std::vector<std::string> pieces = {
       "- a\n", "- b c\n", "  - d\n", "    - e\n", "1. f\n", "2. g\n", "   1. h\n", "- [ ] i\n", "- [x] j\n",
       "> k\n", "> - l\n", ">   - m\n", "> > n\n", ">\n", "\n", "para\n", "  cont\n", "```\n", "  code\n",
-      "    ind\n", "- \n", "* o\n", "+ p\n", "10) q\n", "- > r\n", "\t- s\n", "- é\n", "#  t\n", "-\n"};
+      "    ind\n", "- \n", "* o\n", "+ p\n", "10) q\n", "- > r\n", "\t- s\n", "\t\t- u\n", "\t  v\n", ">\t- w\n", "- é\n", "#  t\n", "-\n"};
   std::string out;
   const int n = std::uniform_int_distribution<int>(1, 12)(rng);
   for (int i = 0; i < n; ++i) out += pieces[std::uniform_int_distribution<std::size_t>(0, pieces.size() - 1)(rng)];
@@ -870,7 +906,7 @@ TEST_CASE("commands: property check of renumbering over random documents", "[ran
     if (const auto r = renumber_lists(doc, before, e.offset, e.offset + e.inserted.size(), {})) {
       for (const Edit& x : r->edits) REQUIRE_NOTHROW(doc.apply(x));
       const auto strip = [](std::string t) {
-        std::erase_if(t, [](char c) { return std::string_view("0123456789.) ").find(c) != std::string_view::npos; });
+        std::erase_if(t, [](char c) { return std::string_view("0123456789.) \t").find(c) != std::string_view::npos; });
         return t;
       };
       CHECK(strip(doc.text()) == strip(edited));
@@ -920,12 +956,13 @@ std::string random_list_document(std::mt19937& rng) {
   static const std::uint64_t starts[] = {1, 1, 8, 9, 98, 99, 998};
   const std::uint64_t start = starts[std::uniform_int_distribution<std::size_t>(0, 6)(rng)];
   const bool ordered = std::uniform_int_distribution<int>(0, 3)(rng) != 0;
+  const bool tabs = std::uniform_int_distribution<int>(0, 2)(rng) == 0;
   const int n = std::uniform_int_distribution<int>(2, 6)(rng);
   std::string out;
   int k = 0;
   for (int i = 0; i < n; ++i) {
     const std::string mark = ordered ? std::to_string(start + static_cast<std::uint64_t>(i)) + ". " : "- ";
-    const std::string pad(mark.size(), ' ');
+    const std::string pad = tabs && mark.size() <= 4 ? "\t" : std::string(mark.size(), ' ');
     const auto word = [&k] { return "i" + std::to_string(k++) + "\n"; };
     out += mark + word();
     switch (std::uniform_int_distribution<int>(0, 4)(rng)) {
@@ -939,6 +976,22 @@ std::string random_list_document(std::mt19937& rng) {
         out += pad + "2. " + word();
         break;
       default: break;
+    }
+  }
+  return out;
+}
+
+std::string expand_tabs(const std::string& t) {
+  std::string out;
+  std::size_t col = 0;
+  for (char c : t) {
+    if (c == '\t') {
+      do {
+        out += ' ';
+      } while (++col % 4 != 0);
+    } else {
+      out += c;
+      col = c == '\n' ? 0 : col + 1;
     }
   }
   return out;
@@ -965,11 +1018,48 @@ TEST_CASE("commands: property check of Tab then Shift+Tab over random lists", "[
       const Document doc2(indented);
       const auto shift_tab = outdent_list(doc2, {moved, moved});
       REQUIRE(shift_tab);
-      CHECK(renumbered(indented, shift_tab->edits) == text);
+      CHECK(expand_tabs(renumbered(indented, shift_tab->edits)) == expand_tabs(text));
       ++round_trips;
     }
   }
   CHECK(round_trips > 2000);
+}
+
+TEST_CASE("commands: property check of Shift+Tab then Tab over random lists", "[random]") {
+  std::mt19937 rng(1414);
+  int round_trips = 0;
+  for (int round = 0; round < 2000; ++round) {
+    const std::string text = random_list_document(rng);
+    const Document doc(text);
+    const SyntaxTree& tree = doc.tree();
+    for (int k = 0;; ++k) {
+      const std::string word = "i" + std::to_string(k) + "\n";
+      const std::size_t at = text.find(word);
+      if (at == std::string::npos) break;
+      NodeId item = tree.node_at(at);
+      while (item != no_node && tree[item].kind != NodeKind::list_item) item = tree[item].parent;
+      REQUIRE(item != no_node);
+      const NodeId list = tree[item].parent;
+      const NodeId up = tree[list].parent;
+      if (up == no_node || tree[up].kind != NodeKind::list_item) continue;
+      if (tree[list].ordered != tree[tree[up].parent].ordered) continue;
+      NodeId next = tree[item].next_sibling;
+      while (next != no_node && tree[next].kind != NodeKind::list_item) next = tree[next].next_sibling;
+      if (next != no_node) continue;
+      INFO("text: " << escaped(text) << " item: " << k);
+      const auto shift_tab = outdent_list(doc, {at, at});
+      REQUIRE(shift_tab);
+      const std::string outdented = renumbered(text, shift_tab->edits);
+      const std::size_t moved = outdented.find(word);
+      REQUIRE(moved != std::string::npos);
+      const Document doc2(outdented);
+      const auto tab = indent_list(doc2, {moved, moved});
+      REQUIRE(tab);
+      CHECK(renumbered(outdented, tab->edits) == text);
+      ++round_trips;
+    }
+  }
+  CHECK(round_trips > 500);
 }
 
 TEST_CASE("commands: property check of Shift+Enter over random documents", "[random]") {

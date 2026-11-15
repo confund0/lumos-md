@@ -53,7 +53,7 @@ bool is_tag(std::string_view tag, std::string_view name) noexcept {
     if (std::tolower(static_cast<unsigned char>(tag[i])) != static_cast<unsigned char>(name[k])) return false;
   }
   if (i == tag.size()) return false;
-  if (is_cmark_space(tag[i]) || tag[i] == '>') return true;
+  if (is_gfm_space(tag[i]) || tag[i] == '>') return true;
   if (tag[i] == '/' && i + 1 < tag.size() && tag[i + 1] == '>') return true;
   return false;
 }
