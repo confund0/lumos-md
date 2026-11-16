@@ -59,6 +59,7 @@ class TestMainWindow : public QObject {
   void window_close_writes_open_tabs_and_restore_reads_them();
   void restore_tabs_skips_missing_file();
   void restore_tabs_all_missing_leaves_blank_tab();
+  void tab_changes_write_open_tabs();
 
  private:
   QAction* find_action(const QString& text) const;
@@ -358,6 +359,33 @@ void TestMainWindow::restore_tabs_all_missing_leaves_blank_tab() {
   win.restore_tabs();
   QCOMPARE(win.tab_count(), 1);
   QVERIFY(win.current_tab()->is_blank());
+}
+
+void TestMainWindow::tab_changes_write_open_tabs() {
+  const QDir dir(dir_->path());
+  const QString tabs_file = dir.filePath(QStringLiteral("open-tabs-live"));
+  const QString a = write_file(dir, QStringLiteral("la.md"), QStringLiteral("# A\n"));
+  const QString b = write_file(dir, QStringLiteral("lb.md"), QStringLiteral("# B\n"));
+  MainWindow win(dir.filePath(QStringLiteral("settings5.ini")), tabs_file);
+  auto* tabs = qobject_cast<QTabWidget*>(win.centralWidget());
+
+  QVERIFY(win.open_file(a));
+  QVERIFY(win.open_file(b));
+  QVERIFY(QTest::qWaitFor([&] { return read_open_tabs(tabs_file).paths == (QStringList{a, b}); }, 5000));
+  QCOMPARE(read_open_tabs(tabs_file).paths, (QStringList{a, b}));
+  QCOMPARE(read_open_tabs(tabs_file).active, b);
+
+  tabs->setCurrentIndex(0);
+  QVERIFY(QTest::qWaitFor([&] { return read_open_tabs(tabs_file).active == a; }, 5000));
+  QCOMPARE(read_open_tabs(tabs_file).active, a);
+
+  tabs->findChild<QTabBar*>()->moveTab(0, 1);
+  QVERIFY(QTest::qWaitFor([&] { return read_open_tabs(tabs_file).paths == (QStringList{b, a}); }, 5000));
+  QCOMPARE(read_open_tabs(tabs_file).paths, (QStringList{b, a}));
+
+  QVERIFY(win.close_tab(0));
+  QVERIFY(QTest::qWaitFor([&] { return read_open_tabs(tabs_file).paths == QStringList{a}; }, 5000));
+  QCOMPARE(read_open_tabs(tabs_file).paths, QStringList{a});
 }
 
 void TestMainWindow::relative_path_stored_absolute() {

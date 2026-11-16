@@ -22,10 +22,12 @@ class QToolButton;
 
 class MainWindow : public QMainWindow {
  public:
-  explicit MainWindow(const QString& settings_file, const QString& open_tabs_file = QString());
+  explicit MainWindow(const QString& settings_file, const QString& open_tabs_file = QString(),
+                       const QString& drafts_dir = QString());
 
   bool open_file(const QString& path);
   void restore_tabs();
+  void open_from_other_start(const QStringList& paths, const QString& activation_token = {});
   void new_tab();
   bool close_tab(int index);
   void reopen_closed_tab();
@@ -40,6 +42,12 @@ class MainWindow : public QMainWindow {
 
  private:
   bool open_path(const QString& path, bool quiet);
+  void open_untitled_draft(const QString& id);
+  void offer_path_draft(DocumentTab* tab);
+  void drain_other_start_queue();
+  void schedule_other_start_drain(int delay_ms);
+  void schedule_tabs_write();
+  void write_tabs_now();
   void update_closed_tabs_actions();
   void open_dialog();
   void open_recent(const QString& path);
@@ -78,9 +86,16 @@ class MainWindow : public QMainWindow {
 
   QSettings settings_;
   QString open_tabs_file_;
+  QString drafts_dir_;
   QStringList closed_tabs_;
   QToolButton* reopen_button_ = nullptr;
   QAction* reopen_action_ = nullptr;
+  QStringList other_start_queue_;
+  QString other_start_token_;
+  bool other_start_draining_ = false;
+  bool other_start_retry_pending_ = false;
+  bool tabs_write_pending_ = false;
+  bool tabs_closed_ = false;  
   QString font_family_;
   double font_size_ = 0;  
   double zoom_ = 1.0;

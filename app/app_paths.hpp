@@ -10,6 +10,7 @@ struct AppPaths {
   QString settings_file() const;
   QString log_file() const;  
   QString open_tabs_file() const;  
+  QString drafts_dir() const;  
 };
 
 AppPaths find_app_paths();

@@ -1,4 +1,4 @@
-.TH LUMOS\-MD 1 2026-11-15 "lumos\-md 0.1.4" "User Commands"
+.TH LUMOS\-MD 1 2026-11-16 "lumos\-md 0.2.0" "User Commands"
 .SH NAME
 lumos\-md \- Markdown editor
 .SH SYNOPSIS
@@ -12,7 +12,13 @@ is a text edit.
 .PP
 Each
 .I file
-given opens in its own tab. Without one, it opens one empty document.
+given opens in its own tab, after the tabs of the last session. Without
+one, the tabs of the last session open, or one empty document. If
+lumos\-md is already running, the files open in its window, and this
+start exits.
+.PP
+A few seconds after an edit, the unsaved text goes to a draft file.
+After a crash, the next start offers to recover it.
 .SH OPTIONS
 .TP
 .BR \-h ", " \-\-help
@@ -30,10 +36,17 @@ in this file.
 The log, one line per event. At 1 MB it moves to
 .IR lumos\-md.log.1 .
 .TP
+.I \(ti/.local/state/lumos\-md/open\-tabs
+The open tabs, for the next start.
+.TP
+.I \(ti/.local/state/lumos\-md/drafts/
+The drafts of unsaved text.
+.TP
 .I \(ti/.lumos\-md/
 If
 .I \(ti/.lumos\-md/lumos\-md.ini
-exists, the settings and the log are in this directory instead.
+exists, the settings, the log, the open tabs and the drafts are in this
+directory instead.
 .SH ENVIRONMENT
 .TP
 .B XDG_CONFIG_HOME

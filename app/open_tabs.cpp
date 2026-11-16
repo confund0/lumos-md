@@ -7,12 +7,14 @@
 
 #include <string>
 
+#include "drafts.hpp"
 #include "lumos/log.hpp"
 
 namespace {
 
 constexpr std::string_view kComp = "app";
 constexpr QChar kActiveMark = QLatin1Char('*');
+constexpr QLatin1String kDraftPrefix("draft:");
 
 bool has_control(const QString& path) {
   for (const QChar c : path) {
@@ -21,9 +23,18 @@ bool has_control(const QString& path) {
   return false;
 }
 
-bool unfit(const QString& path) { return path.isEmpty() || !QDir::isAbsolutePath(path) || has_control(path); }
+bool unfit(const QString& entry) {
+  if (entry.startsWith(kDraftPrefix)) return draft_entry_id(entry).isEmpty();
+  return entry.isEmpty() || !QDir::isAbsolutePath(entry) || has_control(entry);
+}
 
 }  
+
+QString draft_entry_id(const QString& entry) {
+  if (!entry.startsWith(kDraftPrefix)) return QString();
+  const QString id = entry.mid(kDraftPrefix.size());
+  return is_draft_id(id) ? id : QString();
+}
 
 OpenTabsRead read_open_tabs(const QString& file) {
   OpenTabsRead read;

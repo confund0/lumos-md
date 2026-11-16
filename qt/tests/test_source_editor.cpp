@@ -98,6 +98,8 @@ class TestSourceEditor : public QObject {
   void navigation_keys();
   void selection_copy_cut_paste();
   void mouse_click_and_double_click();
+  void primary_selection_gestures();
+  void middle_click_pastes_primary();
   void ctrl_click_on_link();
   void inline_images_off_by_default();
   void inline_images_requests();
@@ -433,6 +435,78 @@ void TestSourceEditor::mouse_click_and_double_click() {
   QTest::mouseDClick(ed.viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(x, top + lh + lh / 2));
   QTest::mouseClick(ed.viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(x, top + lh + lh / 2), 2000);
   QVERIFY(!ed.has_selection());
+}
+
+void TestSourceEditor::primary_selection_gestures() {
+  SourceEditor ed;
+  ed.use_clipboard_as_primary_for_tests(true);
+  ed.resize(600, 400);
+  ed.set_text("first line\nsecond words here\nthird");
+  ed.show();
+  QVERIFY(QTest::qWaitForWindowExposed(&ed));
+  QClipboard* clip = QApplication::clipboard();
+  const int lh = QFontMetrics(ed.font()).height();
+  const int left = ed.cursor_rect().x();
+  const int top = ed.cursor_rect().y();
+
+  clip->setText("none");
+  ed.select(0, 5);
+  QCOMPARE(clip->text(), QString("none"));
+  ed.set_cursor_position(0);
+  QTest::mousePress(ed.viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(1, top + lh / 2));
+  const QPointF end(500, top + lh / 2);
+  QMouseEvent move(QEvent::MouseMove, end, ed.viewport()->mapToGlobal(end), Qt::NoButton, Qt::LeftButton,
+                   Qt::NoModifier);
+  QApplication::sendEvent(ed.viewport(), &move);
+  QCOMPARE(clip->text(), QString("none"));  
+  QTest::mouseRelease(ed.viewport(), Qt::LeftButton, Qt::NoModifier, end.toPoint());
+  QCOMPARE(clip->text(), QString("first line"));
+  const int x = left + QFontMetrics(ed.font()).horizontalAdvance("second w");
+  QTest::mouseDClick(ed.viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(x, top + lh + lh / 2));
+  QCOMPARE(clip->text(), QString("words"));
+  QTest::mousePress(ed.viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(x, top + lh + lh / 2));
+  QTest::mouseRelease(ed.viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(x, top + lh + lh / 2));
+  QCOMPARE(clip->text(), QString("second words here\n"));
+  QTest::mouseClick(ed.viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(1, top + 2 * lh + lh / 2), 2000);
+  QVERIFY(!ed.has_selection());
+  QCOMPARE(clip->text(), QString("second words here\n"));
+  QTest::mouseClick(ed.viewport(), Qt::LeftButton, Qt::ShiftModifier, QPoint(500, top + 2 * lh + lh / 2));
+  QCOMPARE(clip->text(), QString("third"));
+  ed.set_cursor_position(0);
+  key(&ed, Qt::Key_Right, Qt::ShiftModifier);
+  key(&ed, Qt::Key_Right, Qt::ShiftModifier);
+  QCOMPARE(clip->text(), QString("fi"));
+  key(&ed, Qt::Key_A, Qt::ControlModifier);
+  QCOMPARE(clip->text(), QString("first line\nsecond words here\nthird"));
+}
+
+void TestSourceEditor::middle_click_pastes_primary() {
+  SourceEditor ed;
+  ed.resize(600, 400);
+  ed.set_text("first line\r\nsecond");
+  ed.show();
+  QVERIFY(QTest::qWaitForWindowExposed(&ed));
+  const int lh = QFontMetrics(ed.font()).height();
+  const int top = ed.cursor_rect().y();
+  const QPoint line2(1, top + lh + lh / 2);
+  QApplication::clipboard()->setText("XY\nZ");
+
+  QTest::mouseClick(ed.viewport(), Qt::MiddleButton, Qt::NoModifier, line2);
+  QCOMPARE(ed.text(), std::string("first line\r\nsecond"));
+
+  ed.use_clipboard_as_primary_for_tests(true);
+  ed.select(0, 5);
+  QTest::mouseClick(ed.viewport(), Qt::MiddleButton, Qt::NoModifier, line2);
+  QCOMPARE(ed.text(), std::string("first line\r\nXY\r\nZsecond"));
+  QVERIFY(!ed.has_selection());
+  QCOMPARE(ed.cursor_position(), std::size_t{17});
+  ed.undo();
+  QCOMPARE(ed.text(), std::string("first line\r\nsecond"));
+
+  ed.set_read_only(true);
+  QTest::mouseClick(ed.viewport(), Qt::MiddleButton, Qt::NoModifier, line2);
+  QCOMPARE(ed.text(), std::string("first line\r\nsecond"));
+  check_editor(ed);
 }
 
 void TestSourceEditor::ctrl_click_on_link() {

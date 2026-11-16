@@ -41,7 +41,10 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-The editor app is `build/app/lumos-md [file.md]`. It logs to
+The editor app is `build/app/lumos-md [file.md]`. It opens files in
+tabs of one window: a second start opens its files there. A few seconds
+after an edit, the unsaved text goes to a draft file; after a crash, the
+next start offers to recover it. It logs to
 `~/.local/state/lumos-md/lumos-md.log`. For debug lines, add
 `debug=true` under `[log]` in `~/.config/lumos-md/lumos-md.ini`.
 

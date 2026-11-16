@@ -233,6 +233,9 @@ The widget:
 - Ctrl+click on a link, image or autolink emits `linkActivated` with its
   target (`link_at`); the caret does not move. Elsewhere Ctrl+click is
   a plain click.
+- Primary selection (X11, Wayland): a selection made by mouse or keys
+  goes to the primary selection; a middle click inserts it at the click
+  point. Not on a platform without one; the clipboard is not touched.
 - Many widgets can be open at once; they share no state.
 
 The host:

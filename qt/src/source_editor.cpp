@@ -1017,7 +1017,10 @@ void SourceEditor::select(std::size_t anchor, std::size_t cursor) {
   move_cursor(cursor, true);
 }
 
-void SourceEditor::selectAll() { select(0, doc_.size()); }
+void SourceEditor::selectAll() {
+  select(0, doc_.size());
+  set_primary_selection();
+}
 
 void SourceEditor::navigate(Move move, bool keep_anchor) {
   if (!keep_anchor && has_selection() && (move == Move::left || move == Move::right)) {
@@ -1028,6 +1031,7 @@ void SourceEditor::navigate(Move move, bool keep_anchor) {
   const std::size_t target = move_target(move, &x);
   move_cursor(target, keep_anchor);
   if (x >= 0) desired_x_ = x;
+  if (keep_anchor) set_primary_selection();
 }
 
 void SourceEditor::ensure_cursor_visible() {
@@ -1258,14 +1262,36 @@ void SourceEditor::cut() {
 
 void SourceEditor::paste() {
   if (read_only_) return;
-  const QString clip = QGuiApplication::clipboard()->text();
+  insert_clipboard_text(QGuiApplication::clipboard()->text(), "paste");
+}
+
+void SourceEditor::insert_clipboard_text(const QString& clip, const char* event) {
   if (clip.isEmpty()) return;
   const QByteArray utf8 = clip.toUtf8();
   std::string text = normalize_newlines(std::string(utf8.constData(), static_cast<std::size_t>(utf8.size())));
   if (debug_on())
-    log(LogLevel::debug, kComp, "paste",
-        {{"bytes", num(text.size())}, {"newline", newline_ == "\n" ? "lf" : "crlf"}});
+    log(LogLevel::debug, kComp, event, {{"bytes", num(text.size())}, {"newline", newline_ == "\n" ? "lf" : "crlf"}});
   insert_text(text);
+}
+
+std::optional<QClipboard::Mode> SourceEditor::primary_mode() const {
+  if (clipboard_as_primary_) return QClipboard::Clipboard;
+  if (QGuiApplication::clipboard()->supportsSelection()) return QClipboard::Selection;
+  return std::nullopt;
+}
+
+void SourceEditor::set_primary_selection() {
+  const auto mode = primary_mode();
+  if (!mode || !has_selection()) return;
+  const std::string s = selected_text();
+  QGuiApplication::clipboard()->setText(QString::fromUtf8(s.data(), static_cast<qsizetype>(s.size())), *mode);
+}
+
+void SourceEditor::paste_primary(std::size_t pos) {
+  const auto mode = primary_mode();
+  if (!mode || read_only_) return;
+  move_cursor(pos, false);
+  insert_clipboard_text(QGuiApplication::clipboard()->text(*mode), "paste_primary");
 }
 
 bool SourceEditor::event(QEvent* e) {
@@ -1454,11 +1480,13 @@ QVariant SourceEditor::inputMethodQuery(Qt::InputMethodQuery query) const {
 }
 
 void SourceEditor::mousePressEvent(QMouseEvent* e) {
-  if (e->button() != Qt::LeftButton) return QAbstractScrollArea::mousePressEvent(e);
+  const bool middle = e->button() == Qt::MiddleButton && !read_only_ && primary_mode();
+  if (e->button() != Qt::LeftButton && !middle) return QAbstractScrollArea::mousePressEvent(e);
   if (!preedit_.isEmpty()) {
     QGuiApplication::inputMethod()->reset();
     clear_preedit();
   }
+  if (middle) return paste_primary(hit_test(e->position() + QPointF(0, scroll_y())));
   const bool shift = e->modifiers() & Qt::ShiftModifier;
   if ((e->modifiers() & Qt::ControlModifier) && !shift) {
     const QPointF doc_point = e->position() + QPointF(0, scroll_y());
@@ -1487,6 +1515,7 @@ void SourceEditor::mousePressEvent(QMouseEvent* e) {
     const LineSpan& span = lines_[line_index(pos)].span;
     select(span.start, span.next_start());
     selecting_ = false;
+    set_primary_selection();
     return;
   }
   if (!shift && acceptDrops() && has_selection() && pos >= std::min(anchor_, cursor_) &&
@@ -1515,18 +1544,21 @@ void SourceEditor::mouseMoveEvent(QMouseEvent* e) {
 
 void SourceEditor::mouseReleaseEvent(QMouseEvent* e) {
   if (e->button() != Qt::LeftButton) return;
+  const bool was_selecting = selecting_;
   selecting_ = false;
   autoscroll_.stop();
   if (drag_candidate_) {
     drag_candidate_ = false;
     move_cursor(drag_press_doc_pos_, false);
   }
+  if (was_selecting) set_primary_selection();
 }
 
 void SourceEditor::mouseDoubleClickEvent(QMouseEvent* e) {
   if (e->button() != Qt::LeftButton) return;
   select_word_at(hit_test(e->position() + QPointF(0, scroll_y())));
   selecting_ = false;
+  set_primary_selection();
   double_click_ms_ = static_cast<qint64>(e->timestamp());
   double_click_at_ = e->position();
 }

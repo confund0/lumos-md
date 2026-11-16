@@ -47,3 +47,33 @@ TEST_CASE("open tabs: the first of two lines marked active wins") {
   CHECK(read.paths == QStringList{"/a/x.md", "/a/y.md"});
   CHECK(read.active == "/a/x.md");
 }
+
+TEST_CASE("open tabs: draft entries round trip, keep order, the active one marked") {
+  QTemporaryDir dir;
+  REQUIRE(dir.isValid());
+  const QString file = dir.filePath("open-tabs");
+  const QStringList entries = {"/a/x.md", "draft:u-aaaaaaaaaaaaaaaa", "/a/y.md", "draft:p-bbbbbbbbbbbbbbbb"};
+  REQUIRE(write_open_tabs(file, entries, "draft:u-aaaaaaaaaaaaaaaa"));
+  const OpenTabsRead read = read_open_tabs(file);
+  CHECK(read.paths == entries);
+  CHECK(read.active == "draft:u-aaaaaaaaaaaaaaaa");
+}
+
+TEST_CASE("open tabs: a bad or repeated draft id is dropped") {
+  QTemporaryDir dir;
+  REQUIRE(dir.isValid());
+  const QString file = dir.filePath("open-tabs");
+  QFile f(file);
+  REQUIRE(f.open(QIODevice::WriteOnly));
+  f.write(QByteArray("/a/x.md\ndraft:\ndraft:BAD\ndraft:u-aaaaaaaaaaaaaaaa\ndraft:u-aaaaaaaaaaaaaaaa\n"));
+  f.close();
+  const OpenTabsRead read = read_open_tabs(file);
+  CHECK(read.paths == QStringList{"/a/x.md", "draft:u-aaaaaaaaaaaaaaaa"});
+}
+
+TEST_CASE("open tabs: draft_entry_id") {
+  CHECK(draft_entry_id("draft:u-aaaaaaaaaaaaaaaa") == "u-aaaaaaaaaaaaaaaa");
+  CHECK(draft_entry_id("draft:BAD").isEmpty());
+  CHECK(draft_entry_id("draft:").isEmpty());
+  CHECK(draft_entry_id("/a/x.md").isEmpty());
+}

@@ -2,6 +2,7 @@
 
 #include <QAbstractScrollArea>
 #include <QBasicTimer>
+#include <QClipboard>
 #include <QImage>
 #include <QList>
 #include <QMimeData>
@@ -95,6 +96,7 @@ class SourceEditor : public QAbstractScrollArea {
   void set_image_failed(const std::string& url);
   void reload_images();
   int line_height(std::size_t line) const;
+  void use_clipboard_as_primary_for_tests(bool on) { clipboard_as_primary_ = on; }
 
  public slots:
   void undo();
@@ -199,6 +201,10 @@ class SourceEditor : public QAbstractScrollArea {
   void close_group();
   std::string normalize_newlines(std::string text) const;
   void select_word_at(std::size_t pos);
+  void set_primary_selection();
+  void paste_primary(std::size_t pos);
+  void insert_clipboard_text(const QString& clip, const char* event);
+  std::optional<QClipboard::Mode> primary_mode() const;
   std::optional<std::size_t> char_at(QPointF doc_point) const;
   std::optional<std::size_t> image_at(QPointF doc_point) const;
   int image_gap() const;
@@ -255,6 +261,7 @@ class SourceEditor : public QAbstractScrollArea {
   bool read_only_ = false;
   bool caret_on_ = true;
   bool selecting_ = false;
+  bool clipboard_as_primary_ = false;
   qint64 double_click_ms_ = -1;
   QPointF double_click_at_;
   QBasicTimer blink_;

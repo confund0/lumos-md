@@ -1,7 +1,9 @@
 
 #include "main_window.hpp"
 
+#include <QAbstractButton>
 #include <QAction>
+#include <QApplication>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QCloseEvent>
@@ -49,6 +51,7 @@
 #include <utility>
 
 #include "document_tab.hpp"
+#include "drafts.hpp"
 #include "find_bar.hpp"
 #include "open_tabs.hpp"
 #include "recent_files.hpp"
@@ -72,11 +75,13 @@ const QString kFontFamily = QStringLiteral("view/font_family");
 const QString kFontSize = QStringLiteral("view/font_size");
 const QString kZoom = QStringLiteral("view/zoom");
 const QString kRecentFiles = QStringLiteral("recent/files");
+const QLatin1String kDraftPrefix("draft:");
 
 constexpr double kMinZoom = 0.5;
 constexpr double kMaxZoom = 3.0;
 constexpr double kMinFontSize = 4;
 constexpr double kMaxFontSize = 200;
+constexpr int kTabsWriteDelayMs = 300;
 
 double round_zoom(double zoom) { return std::clamp(std::round(zoom * 10) / 10, kMinZoom, kMaxZoom); }
 
@@ -216,8 +221,8 @@ class TabWidget : public QTabWidget {
 
 }  
 
-MainWindow::MainWindow(const QString& settings_file, const QString& open_tabs_file)
-    : settings_(settings_file, QSettings::IniFormat), open_tabs_file_(open_tabs_file) {
+MainWindow::MainWindow(const QString& settings_file, const QString& open_tabs_file, const QString& drafts_dir)
+    : settings_(settings_file, QSettings::IniFormat), open_tabs_file_(open_tabs_file), drafts_dir_(drafts_dir) {
   lumos::log(lumos::LogLevel::debug, kComp, "settings",
              {{"status", status_name(settings_.status())}, {"file", settings_file.toStdString()}});
   const QFont fixed = QFontDatabase::systemFont(QFontDatabase::FixedFont);
@@ -242,8 +247,10 @@ MainWindow::MainWindow(const QString& settings_file, const QString& open_tabs_fi
   update_tab_text(first_tab);
   connect(tabs_, &QTabWidget::currentChanged, this, [this](int) {
     refresh_for_current_tab();
+    schedule_tabs_write();
     lumos::log(lumos::LogLevel::debug, kComp, "tab_switch", {{"tabs", std::to_string(tabs_->count())}});
   });
+  connect(tab_widget->bar(), &QTabBar::tabMoved, this, [this](int, int) { schedule_tabs_write(); });
   connect(tabs_, &QTabWidget::tabCloseRequested, this, [this](int index) { close_tab(index); });
   auto* corner = new TabCorner(tab_widget->bar(), tabs_);
   auto* corner_layout = new QHBoxLayout(corner);
@@ -584,7 +591,91 @@ bool MainWindow::open_path(const QString& path, bool quiet) {
   const int index = tabs_->indexOf(tab);
   if (tabs_->currentIndex() == index) refresh_for_current_tab();
   else tabs_->setCurrentIndex(index);
+  offer_path_draft(tab);
+  schedule_tabs_write();
   return true;
+}
+
+void MainWindow::open_untitled_draft(const QString& id) {
+  std::unique_ptr<QLockFile> lock = lock_draft(drafts_dir_, id);
+  if (lock == nullptr) {
+    lumos::log(lumos::LogLevel::debug, kComp, "draft_skip", {{"id", id.toStdString()}, {"reason", "locked"}});
+    return;
+  }
+  const DraftRead read = read_draft(drafts_dir_, id);
+  if (read.state == DraftState::missing) {
+    lumos::log(lumos::LogLevel::debug, kComp, "draft_skip", {{"id", id.toStdString()}, {"reason", "missing"}});
+    return;
+  }
+  const QByteArray& bytes = read.state == DraftState::unreadable ? read.bytes : read.draft.text;
+  DocumentTab* current = current_tab();
+  const bool reuse = current != nullptr && current->is_blank();
+  DocumentTab* tab = reuse ? current : make_tab();
+  tab->editor()->replace_text(std::string(bytes.constData(), static_cast<std::size_t>(bytes.size())));
+  if (!reuse) tabs_->insertTab(tabs_->currentIndex() + 1, tab, QString());
+  update_tab_text(tab);
+  tab->adopt_draft(id, std::move(lock));
+  const int index = tabs_->indexOf(tab);
+  if (tabs_->currentIndex() == index) refresh_for_current_tab();
+  else tabs_->setCurrentIndex(index);
+  const char* state = read.state == DraftState::ok ? "ok" : read.state == DraftState::damaged ? "damaged" : "unreadable";
+  lumos::log(lumos::LogLevel::debug, kComp, "draft_restore", {{"id", id.toStdString()}, {"state", state}});
+  if (read.state != DraftState::ok)
+    statusBar()->showMessage(tr("A draft was damaged; its text may be incomplete."), 10000);
+}
+
+void MainWindow::offer_path_draft(DocumentTab* tab) {
+  if (drafts_dir_.isEmpty()) return;
+  QString id;
+  std::unique_ptr<QLockFile> lock;
+  for (const QString& candidate : path_draft_ids(drafts_dir_, tab->path())) {
+    lock = lock_draft(drafts_dir_, candidate);
+    if (lock != nullptr) {
+      id = candidate;
+      break;
+    }
+    lumos::log(lumos::LogLevel::debug, kComp, "draft_skip", {{"id", candidate.toStdString()}, {"reason", "locked"}});
+  }
+  if (id.isEmpty()) return;
+
+  const DraftRead read = read_draft(drafts_dir_, id);
+  if (read.state == DraftState::missing) {
+    lock.reset();
+    return;
+  }
+  if (read.state == DraftState::ok && read.draft.text == QByteArray::fromStdString(tab->editor()->text())) {
+    remove_draft(drafts_dir_, id);
+    lock.reset();
+    lumos::log(lumos::LogLevel::debug, kComp, "draft_same", {{"id", id.toStdString()}});
+    return;
+  }
+
+  QMessageBox box(QMessageBox::Question, tr("Recover"),
+                  tr("%1 has unsaved changes from %2 that were not saved (a draft).")
+                      .arg(tab->name(), QLocale().toString(read.written, QLocale::ShortFormat)),
+                  QMessageBox::NoButton, this);
+  QStringList info;
+  if (read.state != DraftState::ok) info << tr("The draft is damaged; its text may be incomplete.");
+  if (read.state != DraftState::unreadable && read.draft.saved_sha256 != tab->saved_sha256())
+    info << tr("The file changed on disk after the draft was written.");
+  box.setInformativeText(info.join(QLatin1Char('\n')));
+  QPushButton* recover = box.addButton(tr("Recover"), QMessageBox::AcceptRole);
+  box.addButton(tr("Discard"), QMessageBox::DestructiveRole);
+  box.setDefaultButton(recover);
+  box.setEscapeButton(recover);
+  box.exec();
+
+  const char* state_name = read.state == DraftState::ok ? "ok" : read.state == DraftState::damaged ? "damaged" : "unreadable";
+  if (box.clickedButton() == recover) {
+    const QByteArray& bytes = read.state == DraftState::unreadable ? read.bytes : read.draft.text;
+    tab->adopt_draft(id, std::move(lock));
+    tab->editor()->replace_text(std::string(bytes.constData(), static_cast<std::size_t>(bytes.size())));
+    lumos::log(lumos::LogLevel::debug, kComp, "draft_recover", {{"id", id.toStdString()}, {"state", state_name}});
+  } else {
+    remove_draft(drafts_dir_, id);
+    lock.reset();
+    lumos::log(lumos::LogLevel::debug, kComp, "draft_discard", {{"id", id.toStdString()}});
+  }
 }
 
 void MainWindow::new_tab() {
@@ -599,15 +690,102 @@ void MainWindow::new_tab() {
 void MainWindow::restore_tabs() {
   if (open_tabs_file_.isEmpty()) return;
   const OpenTabsRead read = read_open_tabs(open_tabs_file_);
-  for (const QString& path : read.paths) open_path(path, true);
+  for (const QString& entry : read.paths) {
+    const QString id = draft_entry_id(entry);
+    if (id.isEmpty()) open_path(entry, true);
+    else open_untitled_draft(id);
+  }
+  if (!drafts_dir_.isEmpty()) {
+    for (const QString& id : list_draft_ids(drafts_dir_)) {
+      if (!id.startsWith(QLatin1String("u-"))) continue;
+      bool held = false;
+      for (int i = 0; i < tabs_->count() && !held; ++i) {
+        DocumentTab* t = tab_at(i);
+        held = t != nullptr && t->draft_id() == id;
+      }
+      if (!held) open_untitled_draft(id);
+    }
+    for (const QString& id : list_draft_ids(drafts_dir_)) {
+      if (!id.startsWith(QLatin1String("p-"))) continue;
+      bool held = false;
+      for (int i = 0; i < tabs_->count() && !held; ++i) {
+        DocumentTab* t = tab_at(i);
+        held = t != nullptr && t->draft_id() == id;
+      }
+      if (held) continue;
+      std::unique_ptr<QLockFile> lock = lock_draft(drafts_dir_, id);
+      if (lock == nullptr) continue;
+      const DraftRead draft_read = read_draft(drafts_dir_, id);
+      lock.reset();
+      if (draft_read.state == DraftState::missing) continue;
+
+      const bool has_path = draft_read.state != DraftState::unreadable && !draft_read.draft.untitled;
+      if (has_path && QFileInfo(draft_read.draft.path).isReadable()) {
+        bool path_open = false;
+        for (int i = 0; i < tabs_->count() && !path_open; ++i) {
+          DocumentTab* t = tab_at(i);
+          path_open = t != nullptr && !t->path().isEmpty() &&
+                      QFileInfo(t->path()).canonicalFilePath() == QFileInfo(draft_read.draft.path).canonicalFilePath();
+        }
+        if (path_open) {
+          lumos::log(lumos::LogLevel::debug, kComp, "draft_skip", {{"id", id.toStdString()}, {"reason", "open"}});
+          continue;
+        }
+        open_path(draft_read.draft.path, true);
+        continue;
+      }
+      open_untitled_draft(id);
+      if (has_path) statusBar()->showMessage(tr("The file of a draft is gone; its text opened as an Untitled tab."), 10000);
+    }
+  }
   if (read.active.isEmpty()) return;
+  const QString active_draft_id = draft_entry_id(read.active);
   for (int i = 0; i < tabs_->count(); ++i) {
     DocumentTab* t = tab_at(i);
-    if (t != nullptr && t->path() == read.active) {
+    if (t == nullptr) continue;
+    const bool match = active_draft_id.isEmpty() ? t->path() == read.active : t->draft_id() == active_draft_id;
+    if (match) {
       tabs_->setCurrentIndex(i);
       return;
     }
   }
+}
+
+void MainWindow::open_from_other_start(const QStringList& paths, const QString& activation_token) {
+  other_start_queue_.append(paths);
+  if (!activation_token.isEmpty()) other_start_token_ = activation_token;
+  if (QApplication::activeModalWidget() != nullptr)
+    lumos::log(lumos::LogLevel::debug, kComp, "instance_queued", {{"paths", std::to_string(paths.size())}});
+  schedule_other_start_drain(0);
+}
+
+void MainWindow::schedule_other_start_drain(int delay_ms) {
+  if (other_start_retry_pending_) return;
+  other_start_retry_pending_ = true;
+  QTimer::singleShot(delay_ms, this, [this] {
+    other_start_retry_pending_ = false;
+    drain_other_start_queue();
+  });
+}
+
+void MainWindow::drain_other_start_queue() {
+  if (other_start_draining_) return;
+  if (QApplication::activeModalWidget() != nullptr) {
+    schedule_other_start_drain(200);
+    return;
+  }
+  other_start_draining_ = true;
+  while (!other_start_queue_.isEmpty()) open_path(other_start_queue_.takeFirst(), false);
+  other_start_draining_ = false;
+  if (isMinimized()) showNormal();
+  raise();
+  if (other_start_token_.isEmpty())
+    qunsetenv("XDG_ACTIVATION_TOKEN");
+  else
+    qputenv("XDG_ACTIVATION_TOKEN", other_start_token_.toUtf8());
+  activateWindow();
+  qunsetenv("XDG_ACTIVATION_TOKEN");
+  other_start_token_.clear();
 }
 
 bool MainWindow::close_tab(int index) {
@@ -617,6 +795,7 @@ bool MainWindow::close_tab(int index) {
     closed_tabs_ = add_recent_file(closed_tabs_, tab->path(), 10);
     update_closed_tabs_actions();
   }
+  tab->drop_draft();
   tabs_->removeTab(index);
   delete tab;
   if (tabs_->count() == 0) {
@@ -624,6 +803,7 @@ bool MainWindow::close_tab(int index) {
     tabs_->addTab(blank, QString());
     update_tab_text(blank);
   }
+  schedule_tabs_write();
   lumos::log(lumos::LogLevel::debug, kComp, "tab_close", {{"tabs", std::to_string(tabs_->count())}});
   return true;
 }
@@ -665,20 +845,38 @@ void MainWindow::closeEvent(QCloseEvent* e) {
       return;
     }
   }
-  if (!open_tabs_file_.isEmpty()) {
-    QStringList paths;
-    QString active;
-    for (int i = 0; i < tabs_->count(); ++i) {
-      DocumentTab* t = tab_at(i);
-      if (t == nullptr || t->path().isEmpty()) continue;
-      paths << t->path();
-      if (t == current_tab()) active = t->path();
-    }
-    write_open_tabs(open_tabs_file_, paths, active);
-  }
+  for (int i = 0; i < tabs_->count(); ++i) tab_at(i)->drop_draft();
+  write_tabs_now();
+  tabs_closed_ = true;
   settings_.setValue(kGeometry, saveGeometry());
   settings_.setValue(kWindowState, saveState());
   e->accept();
+}
+
+void MainWindow::schedule_tabs_write() {
+  if (open_tabs_file_.isEmpty() || tabs_closed_ || tabs_write_pending_) return;
+  tabs_write_pending_ = true;
+  QTimer::singleShot(kTabsWriteDelayMs, this, [this] {
+    tabs_write_pending_ = false;
+    if (!tabs_closed_) write_tabs_now();
+  });
+}
+
+void MainWindow::write_tabs_now() {
+  if (open_tabs_file_.isEmpty()) return;
+  QStringList paths;
+  QString active;
+  for (int i = 0; i < tabs_->count(); ++i) {
+    DocumentTab* t = tab_at(i);
+    if (t == nullptr) continue;
+    QString entry;
+    if (!t->path().isEmpty()) entry = t->path();
+    else if (!t->draft_id().isEmpty()) entry = kDraftPrefix + t->draft_id();
+    else continue;
+    paths << entry;
+    if (t == current_tab()) active = entry;
+  }
+  write_open_tabs(open_tabs_file_, paths, active);
 }
 
 void MainWindow::for_each_tab(const std::function<void(DocumentTab*)>& fn) {
@@ -705,6 +903,9 @@ DocumentTab* MainWindow::make_tab() {
   connect(editor, &QWidget::customContextMenuRequested, this, [this, tab](const QPoint& at) { context_menu(tab, at); });
   tab->set_link_open_failed(
       [this](const QString& url) { statusBar()->showMessage(tr("Cannot open %1").arg(url), 5000); });
+  tab->set_drafts_dir(drafts_dir_);
+  tab->set_draft_changed([this] { schedule_tabs_write(); });
+  tab->set_draft_failed([this] { statusBar()->showMessage(tr("Cannot write the draft file."), 5000); });
   connect(editor, &SourceEditor::modificationChanged, this, [this, tab](bool on) {
     update_tab_text(tab);
     if (tab == current_tab()) {
@@ -1122,6 +1323,7 @@ bool MainWindow::save_as(DocumentTab* tab) {
   if (path.isEmpty()) return false;
   if (!write_tab(tab, path)) return false;
   tab->set_path(path);
+  schedule_tabs_write();
   settings_.sync();
   set_recent_files(add_recent_file(settings_.value(kRecentFiles).toStringList(), path));
   update_tab_text(tab);

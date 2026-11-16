@@ -14,6 +14,7 @@
 #include <QSaveFile>
 #include <QTextCharFormat>
 #include <QThreadPool>
+#include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 
@@ -23,6 +24,7 @@
 #include <string_view>
 #include <utility>
 
+#include "drafts.hpp"
 #include "find_bar.hpp"
 #include "link_open.hpp"
 #include "lumos/log.hpp"
@@ -33,6 +35,7 @@ namespace {
 
 constexpr std::string_view kComp = "app";
 constexpr int kImageMaxHeight = 320;
+constexpr int kDraftDelayMs = 3000;
 
 QString image_dir(const QString& note_path) {
   return note_path.isEmpty() ? QDir::current().absolutePath() : QFileInfo(note_path).absolutePath();
@@ -51,10 +54,22 @@ DocumentTab::DocumentTab(QWidget* parent) : QWidget(parent) {
   layout->addWidget(editor_);
   layout->addWidget(find_bar_);
 
+  draft_timer_ = new QTimer(this);
+  draft_timer_->setSingleShot(true);
+  draft_timer_->setInterval(kDraftDelayMs);
+  connect(draft_timer_, &QTimer::timeout, this, [this] { write_draft_now(); });
+
   editor_->set_image_max_height(kImageMaxHeight);
   connect(editor_, &lumos::qt::SourceEditor::imageRequested, this,
           [this](const std::string& url) { load_image(url); });
-  connect(editor_, &lumos::qt::SourceEditor::textChanged, this, [this] { update_marks(); });
+  connect(editor_, &lumos::qt::SourceEditor::textChanged, this, [this] {
+    update_marks();
+    if (!drafts_off_ && !drafts_dir_.isEmpty() && editor_->is_modified() && !draft_timer_->isActive())
+      draft_timer_->start();
+  });
+  connect(editor_, &lumos::qt::SourceEditor::modificationChanged, this, [this](bool modified) {
+    if (!modified) clear_draft();
+  });
   connect(editor_, &lumos::qt::SourceEditor::linkActivated, this, [this](const lumos::LinkTarget& target) {
     const QUrl url = link_url(target, path_);
     const bool ok = !url.isEmpty() && (!url.isLocalFile() || QFileInfo::exists(url.toLocalFile())) &&
@@ -64,6 +79,8 @@ DocumentTab::DocumentTab(QWidget* parent) : QWidget(parent) {
     if (!ok && link_open_failed_) link_open_failed_(QString::fromStdString(target.url));
   });
 }
+
+DocumentTab::~DocumentTab() = default;
 
 QString DocumentTab::name() const { return path_.isEmpty() ? tr("Untitled") : QFileInfo(path_).fileName(); }
 
@@ -81,6 +98,7 @@ bool DocumentTab::load(const QString& path, bool keep_position, QString* error) 
   }
   const QByteArray bytes = f.readAll();
   path_ = absolute_path(path);
+  saved_sha256_ = sha256_hex(bytes);
   editor_->set_text(std::string(bytes.constData(), static_cast<std::size_t>(bytes.size())), keep_position);
   update_marks();
   lumos::log(lumos::LogLevel::debug, kComp, "open",
@@ -101,6 +119,7 @@ bool DocumentTab::write(const QString& path, QString* error) {
     if (error != nullptr) *error = f.errorString();
     return false;
   }
+  saved_sha256_ = sha256_hex(QByteArrayView(text.data(), static_cast<qsizetype>(text.size())));
   editor_->mark_saved();
   lumos::log(lumos::LogLevel::debug, kComp, "save",
              {{"path", path.toStdString()}, {"bytes", std::to_string(text.size())}});
@@ -115,6 +134,65 @@ void DocumentTab::set_path(const QString& path) {
 
 void DocumentTab::set_link_open_failed(std::function<void(const QString&)> callback) {
   link_open_failed_ = std::move(callback);
+}
+
+void DocumentTab::set_drafts_dir(const QString& dir) { drafts_dir_ = dir; }
+
+void DocumentTab::set_draft_changed(std::function<void()> callback) { draft_changed_ = std::move(callback); }
+
+void DocumentTab::set_draft_failed(std::function<void()> callback) { draft_failed_ = std::move(callback); }
+
+void DocumentTab::write_draft_now() {
+  if (drafts_off_ || drafts_dir_.isEmpty() || !editor_->is_modified()) return;
+  bool claimed_now = false;
+  if (draft_id_.isEmpty()) {
+    QString id;
+    std::unique_ptr<QLockFile> lock;
+    if (path_.isEmpty()) {
+      id = new_untitled_draft_id();
+      lock = lock_draft(drafts_dir_, id);
+    } else {
+      id = claim_path_draft_id(drafts_dir_, path_, &lock);
+    }
+    if (id.isEmpty() || lock == nullptr) {
+      if (draft_failed_) draft_failed_();
+      return;
+    }
+    draft_id_ = id;
+    draft_lock_ = std::move(lock);
+    claimed_now = true;
+  }
+  Draft d;
+  d.untitled = path_.isEmpty();
+  d.path = path_;
+  d.saved_sha256 = saved_sha256_;
+  const std::string text = editor_->text();
+  d.text = QByteArray(text.data(), static_cast<qsizetype>(text.size()));
+  const bool ok = write_draft(drafts_dir_, draft_id_, d);
+  if (claimed_now && draft_changed_) draft_changed_();
+  if (!ok && draft_failed_) draft_failed_();
+}
+
+void DocumentTab::clear_draft() {
+  draft_timer_->stop();
+  if (draft_id_.isEmpty()) return;
+  remove_draft(drafts_dir_, draft_id_);
+  draft_lock_.reset();
+  draft_id_.clear();
+  if (draft_changed_) draft_changed_();
+}
+
+void DocumentTab::drop_draft() {
+  clear_draft();
+  drafts_off_ = true;
+}
+
+bool DocumentTab::adopt_draft(const QString& id, std::unique_ptr<QLockFile> lock) {
+  if (!is_draft_id(id) || lock == nullptr) return false;
+  draft_id_ = id;
+  draft_lock_ = std::move(lock);
+  if (draft_changed_) draft_changed_();
+  return true;
 }
 
 void DocumentTab::update_marks() {

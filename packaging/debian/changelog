@@ -1,3 +1,18 @@
+lumos-md (0.2.0-1) unstable; urgency=medium
+
+  * Added one window for all starts: files given to a second start
+    open as tabs in the running window, and the window comes to the
+    front.
+  * Added drafts: a few seconds after an edit, the unsaved text goes
+    to a draft file. After a crash, the next start offers to recover
+    it.
+  * Updated the tab list: it is saved after each tab change, so the
+    tabs also come back after a crash.
+  * Added the primary selection: selected text goes to it, and a
+    middle click inserts it.
+
+ -- confund0 <110197472+confund0@users.noreply.github.com>  Mon, 16 Nov 2026 12:00:00 +0000
+
 lumos-md (0.1.4-1) unstable; urgency=medium
 
   * Fixed Enter, Tab, Shift+Tab and Shift+Enter in lists indented
