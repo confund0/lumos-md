@@ -80,6 +80,11 @@ void TestSingleInstance::names() {
   QVERIFY(base.mkpath(QStringLiteral("a/c")));
   QCOMPARE(instance_server_name(base.filePath(QStringLiteral("a/b/../c")), QString()),
            instance_server_name(base.filePath(QStringLiteral("a/c")), QString()));
+
+  const QString mcp_name = instance_server_name(state_a.path(), QString(), QStringLiteral("lumos-md-mcp-"));
+  QVERIFY(mcp_name != n1);
+  QVERIFY(mcp_name.startsWith(QStringLiteral("lumos-md-mcp-")));
+  QCOMPARE(mcp_name.mid(mcp_name.length() - 16), n1.mid(n1.length() - 16));
 }
 
 void TestSingleInstance::no_server_gives_no_server() {

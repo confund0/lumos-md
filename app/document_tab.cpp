@@ -70,17 +70,32 @@ DocumentTab::DocumentTab(QWidget* parent) : QWidget(parent) {
   connect(editor_, &lumos::qt::SourceEditor::modificationChanged, this, [this](bool modified) {
     if (!modified) clear_draft();
   });
-  connect(editor_, &lumos::qt::SourceEditor::linkActivated, this, [this](const lumos::LinkTarget& target) {
-    const QUrl url = link_url(target, path_);
-    const bool ok = !url.isEmpty() && (!url.isLocalFile() || QFileInfo::exists(url.toLocalFile())) &&
-                    QDesktopServices::openUrl(url);
-    lumos::log(lumos::LogLevel::debug, kComp, "link_open",
-               {{"url", url.toString().toStdString()}, {"ok", ok ? "1" : "0"}});
-    if (!ok && link_open_failed_) link_open_failed_(QString::fromStdString(target.url));
-  });
+  connect(editor_, &lumos::qt::SourceEditor::linkActivated, this,
+          [this](const lumos::LinkTarget& target) { open_link(target); });
+}
+
+void DocumentTab::open_link(const lumos::LinkTarget& target) {
+  const QUrl url = link_url(target, path_);
+  const bool ok = !url.isEmpty() && (!url.isLocalFile() || QFileInfo::exists(url.toLocalFile())) &&
+                  QDesktopServices::openUrl(url);
+  lumos::log(lumos::LogLevel::debug, kComp, "link_open",
+             {{"url", url.toString().toStdString()}, {"ok", ok ? "1" : "0"}});
+  if (!ok && link_open_failed_) link_open_failed_(QString::fromStdString(target.url));
 }
 
 DocumentTab::~DocumentTab() = default;
+
+bool DocumentTab::update_read_only_file() {
+  bool read_only = false;
+  if (!path_.isEmpty()) {
+    const QFileInfo file(path_);
+    read_only = (file.exists() && !file.isWritable()) || !QFileInfo(file.absolutePath()).isWritable();
+  }
+  if (read_only == read_only_file_) return false;
+  read_only_file_ = read_only;
+  lumos::log(lumos::LogLevel::debug, kComp, "read_only_file", {{"on", read_only ? "1" : "0"}});
+  return true;
+}
 
 QString DocumentTab::name() const { return path_.isEmpty() ? tr("Untitled") : QFileInfo(path_).fileName(); }
 
@@ -98,7 +113,12 @@ bool DocumentTab::load(const QString& path, bool keep_position, QString* error) 
   }
   const QByteArray bytes = f.readAll();
   path_ = absolute_path(path);
+  base_ = bytes;
   saved_sha256_ = sha256_hex(bytes);
+  kept_sha256_.clear();
+  disk_pending_ = DiskState::same;
+  gone_kept_ = false;
+  update_read_only_file();
   editor_->set_text(std::string(bytes.constData(), static_cast<std::size_t>(bytes.size())), keep_position);
   update_marks();
   lumos::log(lumos::LogLevel::debug, kComp, "open",
@@ -119,7 +139,11 @@ bool DocumentTab::write(const QString& path, QString* error) {
     if (error != nullptr) *error = f.errorString();
     return false;
   }
+  base_ = QByteArray(text.data(), static_cast<qsizetype>(text.size()));
   saved_sha256_ = sha256_hex(QByteArrayView(text.data(), static_cast<qsizetype>(text.size())));
+  kept_sha256_.clear();
+  disk_pending_ = DiskState::same;
+  gone_kept_ = false;
   editor_->mark_saved();
   lumos::log(lumos::LogLevel::debug, kComp, "save",
              {{"path", path.toStdString()}, {"bytes", std::to_string(text.size())}});
@@ -129,6 +153,7 @@ bool DocumentTab::write(const QString& path, QString* error) {
 void DocumentTab::set_path(const QString& path) {
   const bool moved = image_dir(path) != image_dir(path_);
   path_ = absolute_path(path);
+  update_read_only_file();
   if (moved) editor_->reload_images();
 }
 
@@ -193,6 +218,32 @@ bool DocumentTab::adopt_draft(const QString& id, std::unique_ptr<QLockFile> lock
   draft_lock_ = std::move(lock);
   if (draft_changed_) draft_changed_();
   return true;
+}
+
+void DocumentTab::reload_from_disk(const QByteArray& bytes) {
+  editor_->replace_text(std::string(bytes.constData(), static_cast<std::size_t>(bytes.size())));
+  editor_->mark_saved();
+  base_ = bytes;
+  saved_sha256_ = sha256_hex(bytes);
+  kept_sha256_.clear();
+  disk_pending_ = DiskState::same;
+  update_marks();
+  lumos::log(lumos::LogLevel::debug, kComp, "disk_reload", {{"bytes", std::to_string(bytes.size())}});
+}
+
+void DocumentTab::use_merge(const QByteArray& result, const QByteArray& seen) {
+  editor_->replace_text(std::string(result.constData(), static_cast<std::size_t>(result.size())));
+  base_ = seen;
+  saved_sha256_ = sha256_hex(seen);
+  kept_sha256_.clear();
+  disk_pending_ = DiskState::same;
+  if (result == seen) {
+    editor_->mark_saved();
+  } else {
+    editor_->mark_unsaved();
+    write_draft_now();
+  }
+  update_marks();
 }
 
 void DocumentTab::update_marks() {

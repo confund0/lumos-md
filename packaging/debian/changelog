@@ -1,3 +1,23 @@
+lumos-md (0.3.0-1) unstable; urgency=medium
+
+  * Added the file watch: a file that changes on disk loads again as
+    one undo step. A tab with unsaved changes asks first and can show
+    both texts side by side, to merge them.
+  * Added read-only files: a file without write access opens for
+    edits, the title shows [Read-Only], and Save opens Save As.
+  * Added Edit, Paste from HTML (Ctrl+Alt+V): a copy from a web page
+    goes in as Markdown.
+  * Added View, Show Preview: the current tab as HTML, right of the
+    editor.
+  * Added View, Theme: Default, Light grey and Gruvbox. Tabs have
+    rounded handles and a close button each.
+  * Added a read-only MCP server (Tools, Enable MCP Server; off by
+    default): AI agents can read the open files, with unsaved changes.
+  * Fixed Save As onto a file that another tab has open: it is now
+    refused with a warning.
+
+ -- confund0 <110197472+confund0@users.noreply.github.com>  Sun, 22 Nov 2026 12:00:00 +0000
+
 lumos-md (0.2.0-1) unstable; urgency=medium
 
   * Added one window for all starts: files given to a second start

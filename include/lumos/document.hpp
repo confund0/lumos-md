@@ -62,6 +62,7 @@ class Document {
   std::uint64_t version() const { return version_; }
 
   void mark_saved();
+  void mark_unsaved();
   bool modified() const;
 
   ListenerId add_listener(Listener listener);
@@ -82,6 +83,7 @@ class Document {
   std::vector<std::uint64_t> redo_ids_;
   std::uint64_t next_id_ = 1;
   std::uint64_t saved_id_ = 0;
+  static constexpr std::uint64_t kNoSavedId = UINT64_MAX;
   bool open_edits_ = false;  
 
   std::vector<std::pair<ListenerId, std::shared_ptr<Listener>>> listeners_;

@@ -284,9 +284,12 @@ void append_plain_text(const SyntaxTree& tree, const TextSource& text, NodeId ro
 class Renderer {
  public:
   Renderer(const SyntaxTree& tree, const TextSource& text, const HtmlOptions& options, std::string& out)
-      : tree_(tree), text_(text), options_(options), out_(out) {}
+      : tree_(tree), text_(text), options_(options), out_(out), base_(out.size()) {}
 
-  void run() { run_range(0, static_cast<NodeId>(tree_.size())); }
+  bool run() {
+    run_range(0, static_cast<NodeId>(tree_.size()));
+    return !over_cap();
+  }
 
  private:
   struct Open {
@@ -297,6 +300,7 @@ class Renderer {
     std::vector<Open> open;
     NodeId i = lo;
     while (i < hi) {
+      if (over_cap()) return;
       while (!open.empty() && tree_.node(open.back().id).subtree_end <= i) {
         close(open.back());
         open.pop_back();
@@ -364,12 +368,14 @@ class Renderer {
         out_ += "<h";
         out_ += static_cast<char>('0' + n.level);
         out_ += '>';
+        anchor(id);
         return true;
       case NodeKind::paragraph:
         if (!in_tight_list(tree_, id)) {
           cr(out_);
           out_ += "<p>";
         }
+        anchor(id);
         return true;
       case NodeKind::thematic_break:
         cr(out_);
@@ -598,6 +604,7 @@ class Renderer {
       for (char ch : word) append_escaped_byte(ch, out_);
       out_ += "\">";
     }
+    anchor(id);
     if (content != no_node) append_literal(tree_, text_, content, true, out_);
     out_ += "</code></pre>\n";
   }
@@ -656,6 +663,7 @@ class Renderer {
         case Alignment::none: break;
       }
       out_ += ">";
+      if (col == 0) anchor(row);
       if (cell != no_node) run_range(cell + 1, tree_.node(cell).subtree_end);
       out_ += is_header ? "</th>" : "</td>";
     }
@@ -667,10 +675,24 @@ class Renderer {
     }
   }
 
+  bool over_cap() {
+    if (!over_ && options_.output_cap != 0 && out_.size() - base_ > options_.output_cap) over_ = true;
+    return over_;
+  }
+
+  void anchor(NodeId id) {
+    if (!options_.source_anchors) return;
+    out_ += "<a name=\"lumos-";
+    out_ += std::to_string(tree_.node(id).start);
+    out_ += "\"></a>";
+  }
+
   const SyntaxTree& tree_;
   const TextSource& text_;
   const HtmlOptions& options_;
   std::string& out_;
+  std::size_t base_;  
+  bool over_ = false;
   bool ref_defs_built_ = false;
   std::unordered_map<std::string, RefDef> ref_defs_;
   std::vector<bool> link_wrapped_;
@@ -702,13 +724,16 @@ void append_escaped_href(std::string_view url, std::string& out) {
   }
 }
 
-void render_html(const SyntaxTree& tree, const TextSource& text, const HtmlOptions& options, std::string& out) {
-  Renderer(tree, text, options, out).run();
+bool render_html(const SyntaxTree& tree, const TextSource& text, const HtmlOptions& options, std::string& out) {
+  const std::size_t base = out.size();
+  if (Renderer(tree, text, options, out).run()) return true;
+  out.resize(base);
+  return false;
 }
 
 std::string render_html(const SyntaxTree& tree, const TextSource& text, const HtmlOptions& options) {
   std::string out;
-  render_html(tree, text, options, out);
+  (void)render_html(tree, text, options, out);
   return out;
 }
 

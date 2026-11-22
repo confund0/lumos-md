@@ -195,6 +195,12 @@ void SourceEditor::mark_saved() {
   check_modified();
 }
 
+void SourceEditor::mark_unsaved() {
+  close_group();
+  doc_.mark_unsaved();
+  check_modified();
+}
+
 bool SourceEditor::canUndo() const {
   return !read_only_ && (doc_.can_undo() || (group_ != Group::none && doc_.version() != group_version_));
 }

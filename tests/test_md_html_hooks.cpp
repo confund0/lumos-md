@@ -150,3 +150,50 @@ TEST_CASE("html hooks: a keep-all node hook gives the default output") {
   };
   CHECK(render(doc, opt) == plain);
 }
+
+TEST_CASE("html hooks: source anchors mark paragraphs, headings, code blocks and table rows") {
+  md::HtmlOptions opt;
+  opt.source_anchors = true;
+  CHECK(render("# Head\n\npara\n\n- a\n- b\n\n```\ncode\n```\n", opt) ==
+        "<h1><a name=\"lumos-0\"></a>Head</h1>\n"
+        "<p><a name=\"lumos-8\"></a>para</p>\n"
+        "<ul>\n<li><a name=\"lumos-16\"></a>a</li>\n<li><a name=\"lumos-20\"></a>b</li>\n</ul>\n"
+        "<pre><code><a name=\"lumos-23\"></a>code\n</code></pre>\n");
+  CHECK(render("| a | b |\n|---|---|\n| c | d |\n", opt) ==
+        "<table>\n<thead>\n<tr>\n<th><a name=\"lumos-0\"></a>a</th>\n<th>b</th>\n</tr>\n</thead>\n"
+        "<tbody>\n<tr>\n<td><a name=\"lumos-20\"></a>c</td>\n<td>d</td>\n</tr>\n</tbody>\n</table>\n");
+  CHECK(render("# Head\n\npara\n", {}) == "<h1>Head</h1>\n<p>para</p>\n");
+}
+
+TEST_CASE("html hooks: the output cap writes nothing over the cap") {
+  std::string doc = "[x]: /" + std::string(50, 'a') + "\n\n";
+  for (int i = 0; i < 10; ++i) doc += "[x] ";
+  lumos::Dialect d;
+  auto p = md::make_markdown_parser(d);
+  const lumos::StringSource s(doc);
+  p->parse(s);
+  md::HtmlOptions opt;
+  opt.output_cap = 100;
+  std::string out = "keep";
+  CHECK_FALSE(md::render_html(p->tree(), s, opt, out));
+  CHECK(out == "keep");
+  CHECK(md::render_html(p->tree(), s, opt).empty());
+  opt.output_cap = 0;
+  CHECK(md::render_html(p->tree(), s, opt, out));
+  CHECK(out.size() > 600);
+  opt.output_cap = out.size() - 4;
+  std::string exact;
+  CHECK(md::render_html(p->tree(), s, opt, exact));
+}
+
+TEST_CASE("html hooks: the default cap stops a note that expands past 16 MiB") {
+  std::string doc = "[x]: /" + std::string(100'000, 'a') + "\n\n";
+  for (int i = 0; i < 200; ++i) doc += "[x] ";
+  lumos::Dialect d;
+  auto p = md::make_markdown_parser(d);
+  const lumos::StringSource s(doc);
+  p->parse(s);
+  std::string out;
+  CHECK_FALSE(md::render_html(p->tree(), s, {}, out));
+  CHECK(out.empty());
+}

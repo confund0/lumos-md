@@ -158,6 +158,15 @@ void Document::mark_saved() {
   if (debug_on()) log(LogLevel::debug, kComp, "mark_saved", {{"version", num(version_)}});
 }
 
+void Document::mark_unsaved() {
+  if (buffer_.in_transaction()) {
+    log(LogLevel::debug, kComp, "mark_unsaved_in_transaction");
+    throw std::logic_error("Document::mark_unsaved: transaction is open");
+  }
+  saved_id_ = kNoSavedId;
+  if (debug_on()) log(LogLevel::debug, kComp, "mark_unsaved", {{"version", num(version_)}});
+}
+
 bool Document::modified() const { return open_edits_ || state() != saved_id_; }
 
 Document::ListenerId Document::add_listener(Listener listener) {

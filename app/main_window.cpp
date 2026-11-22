@@ -3,12 +3,16 @@
 
 #include <QAbstractButton>
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
+#include <QClipboard>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QCloseEvent>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFileSystemWatcher>
 #include <QDesktopServices>
 #include <QDialog>
 #include <QDir>
@@ -25,10 +29,13 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
 #include <QPointer>
+#include <QRegularExpression>
+#include <QScrollBar>
 #include <QStyle>
 #include <QTabBar>
 #include <QTabWidget>
@@ -52,9 +59,17 @@
 
 #include "document_tab.hpp"
 #include "drafts.hpp"
+#include "file_watch.hpp"
 #include "find_bar.hpp"
+#include "html_paste.hpp"
+#include "line_merge.hpp"
+#include "mcp_bridge.hpp"
+#include "mcp_server.hpp"
+#include "merge_window.hpp"
 #include "open_tabs.hpp"
+#include "preview.hpp"
 #include "recent_files.hpp"
+#include "theme.hpp"
 #include "toolbar_icons.hpp"
 #include "lumos/commands.hpp"
 #include "lumos/log.hpp"
@@ -71,10 +86,16 @@ const QString kStatusBar = QStringLiteral("view/status_bar");
 const QString kLineNumbers = QStringLiteral("view/line_numbers");
 const QString kLimitWidth = QStringLiteral("view/limit_text_width");
 const QString kPaperLook = QStringLiteral("view/paper_look");
+const QString kTheme = QStringLiteral("view/theme");
 const QString kFontFamily = QStringLiteral("view/font_family");
 const QString kFontSize = QStringLiteral("view/font_size");
 const QString kZoom = QStringLiteral("view/zoom");
+const QString kPreview = QStringLiteral("view/preview");
+const QString kPreviewShare = QStringLiteral("view/preview_share");
 const QString kRecentFiles = QStringLiteral("recent/files");
+const QString kMcpEnabled = QStringLiteral("mcp/enabled");
+const QString kMcpSocketDir = QStringLiteral("mcp/socket_dir");
+const QString kMcpUseSocketDir = QStringLiteral("mcp/use_socket_dir");
 const QLatin1String kDraftPrefix("draft:");
 
 constexpr double kMinZoom = 0.5;
@@ -82,6 +103,7 @@ constexpr double kMaxZoom = 3.0;
 constexpr double kMinFontSize = 4;
 constexpr double kMaxFontSize = 200;
 constexpr int kTabsWriteDelayMs = 300;
+constexpr int kPreviewDelayMs = 300;
 
 double round_zoom(double zoom) { return std::clamp(std::round(zoom * 10) / 10, kMinZoom, kMaxZoom); }
 
@@ -178,17 +200,34 @@ class TabBar : public QTabBar {
     corner_ = corner;
     updateGeometry();
   }
-  int overlap() const { return style()->pixelMetric(QStyle::PM_TabBarBaseOverlap, nullptr, this); }
+  int base_height() const { return style()->pixelMetric(QStyle::PM_TabBarBaseHeight, nullptr, parentWidget()); }
   int own_height() const { return QTabBar::sizeHint().height(); }
 
  protected:
   QSize sizeHint() const override { return keep_height(QTabBar::sizeHint()); }
   QSize minimumSizeHint() const override { return keep_height(QTabBar::minimumSizeHint()); }
 
+  void tabInserted(int index) override {
+    QTabBar::tabInserted(index);
+    auto* close = new QToolButton(this);
+    close->setObjectName(QStringLiteral("tab_close"));
+    close->setText(QString::fromUtf8("\xC3\x97"));  
+    close->setToolTip(QTabBar::tr("Close"));
+    close->setFocusPolicy(Qt::NoFocus);
+    connect(close, &QToolButton::clicked, this, [this, close] {
+      for (int i = 0; i < count(); ++i)
+        if (tabButton(i, QTabBar::RightSide) == close) {
+          emit tabCloseRequested(i);
+          return;
+        }
+    });
+    setTabButton(index, QTabBar::RightSide, close);
+  }
+
  private:
   QSize keep_height(QSize size) const {
     if (const QWidget* corner = corner_.data(); corner != nullptr)
-      size.setHeight(std::max(size.height(), corner->layout()->sizeHint().height() + overlap()));
+      size.setHeight(std::max(size.height(), corner->layout()->sizeHint().height() + base_height()));
     return size;
   }
 
@@ -201,7 +240,7 @@ class TabCorner : public QWidget {
 
   QSize sizeHint() const override {
     QSize size = QWidget::sizeHint();
-    size.setHeight(std::max(size.height(), bar_->own_height() - bar_->overlap()));
+    size.setHeight(std::max(size.height(), bar_->own_height() - bar_->base_height()));
     return size;
   }
 
@@ -219,6 +258,12 @@ class TabWidget : public QTabWidget {
   TabBar* bar_;
 };
 
+QString path_key(const QString& path) {
+  const QFileInfo info(path);
+  const QString canonical = info.canonicalFilePath();
+  return canonical.isEmpty() ? QDir::cleanPath(info.absoluteFilePath()) : canonical;
+}
+
 }  
 
 MainWindow::MainWindow(const QString& settings_file, const QString& open_tabs_file, const QString& drafts_dir)
@@ -235,23 +280,49 @@ MainWindow::MainWindow(const QString& settings_file, const QString& open_tabs_fi
   line_numbers_ = settings_.value(kLineNumbers, line_numbers_).toBool();
   limit_width_ = settings_.value(kLimitWidth, limit_width_).toBool();
   paper_look_ = settings_.value(kPaperLook, paper_look_).toBool();
+  const Theme& theme = find_theme(settings_.value(kTheme).toString());
+  theme_ = QString::fromLatin1(theme.id.data(), static_cast<qsizetype>(theme.id.size()));
+  apply_theme(theme);
+  mcp_enabled_ = settings_.value(kMcpEnabled, mcp_enabled_).toBool();
+  mcp_socket_dir_ = settings_.value(kMcpSocketDir).toString();
+  mcp_use_socket_dir_ = settings_.value(kMcpUseSocketDir, false).toBool() && !mcp_socket_dir_.isEmpty();
 
   auto* tab_widget = new TabWidget(this);
   tabs_ = tab_widget;
   tabs_->setDocumentMode(true);
   tabs_->setMovable(true);
-  tabs_->setTabsClosable(true);
-  setCentralWidget(tabs_);
+  preview_ = new PreviewView(this);
+  preview_->set_link_clicked([this](const lumos::LinkTarget& target) { current_tab()->open_link(target); });
+  preview_box_ = new QWidget(this);
+  auto* box_layout = new QVBoxLayout(preview_box_);
+  box_layout->setSpacing(0);
+  box_layout->addWidget(preview_);
+  splitter_ = new PreviewSplitter(tabs_, preview_box_, this);
+  splitter_->set_preview_share(settings_.value(kPreviewShare, 0.5).toDouble());
+  splitter_->set_changed([this] { on_preview_size_changed(); });
+  preview_box_->hide();
+  preview_->hide();
+  setCentralWidget(splitter_);
   DocumentTab* first_tab = make_tab();
   tabs_->addTab(first_tab, QString());
   update_tab_text(first_tab);
   connect(tabs_, &QTabWidget::currentChanged, this, [this](int) {
     refresh_for_current_tab();
     schedule_tabs_write();
+    render_preview();
+    watch_timer_->start();
     lumos::log(lumos::LogLevel::debug, kComp, "tab_switch", {{"tabs", std::to_string(tabs_->count())}});
   });
+  file_watcher_ = new QFileSystemWatcher(this);
+  watch_timer_ = new QTimer(this);
+  watch_timer_->setSingleShot(true);
+  watch_timer_->setInterval(200);
+  connect(watch_timer_, &QTimer::timeout, this, [this] { check_files(); });
+  connect(file_watcher_, &QFileSystemWatcher::fileChanged, this, [this](const QString&) { watch_timer_->start(); });
+  connect(file_watcher_, &QFileSystemWatcher::directoryChanged, this,
+          [this](const QString&) { watch_timer_->start(); });
   connect(tab_widget->bar(), &QTabBar::tabMoved, this, [this](int, int) { schedule_tabs_write(); });
-  connect(tabs_, &QTabWidget::tabCloseRequested, this, [this](int index) { close_tab(index); });
+  connect(tab_widget->bar(), &QTabBar::tabCloseRequested, this, [this](int index) { close_tab(index); });
   auto* corner = new TabCorner(tab_widget->bar(), tabs_);
   auto* corner_layout = new QHBoxLayout(corner);
   constexpr double kRightMm = 4.0;
@@ -322,6 +393,17 @@ MainWindow::MainWindow(const QString& settings_file, const QString& open_tabs_fi
   copy_->setShortcut(QKeySequence::Copy);
   paste_ = edit->addAction(tr("&Paste"), this, [this] { current_tab()->editor()->paste(); });
   paste_->setShortcut(QKeySequence::Paste);
+  paste_html_ = edit->addAction(tr("Paste from &HTML"), this, [this] { paste_from_html(); });
+  paste_html_->setShortcut(QKeySequence(Qt::ControlModifier | Qt::AltModifier | Qt::Key_V));
+  const auto read_clipboard = [this] {
+    const QMimeData* mime = QGuiApplication::clipboard()->mimeData();
+    clipboard_html_ = mime != nullptr && mime->hasHtml();
+  };
+  read_clipboard();
+  connect(QGuiApplication::clipboard(), &QClipboard::dataChanged, this, [this, read_clipboard] {
+    read_clipboard();
+    if (tabs_ != nullptr && tabs_->count() > 0) update_actions();
+  });
   edit->addSeparator();
   QAction* select_all = edit->addAction(tr("Select &All"), this, [this] { current_tab()->editor()->selectAll(); });
   select_all->setShortcut(QKeySequence::SelectAll);
@@ -353,6 +435,13 @@ MainWindow::MainWindow(const QString& settings_file, const QString& open_tabs_fi
     statusBar()->setVisible(on);
     settings_.setValue(kStatusBar, on);
   });
+  show_preview_ = view->addAction(tr("Show &Preview"));
+  show_preview_->setCheckable(true);
+  connect(show_preview_, &QAction::toggled, this, [this](bool on) {
+    set_preview_shown(on);
+    settings_.setValue(kPreview, on);
+  });
+  show_preview_->setChecked(settings_.value(kPreview, false).toBool());
   view->addSeparator();
   const auto add_view_setting = [&](const QString& name, bool current, auto on_toggle) {
     QAction* a = view->addAction(name);
@@ -375,6 +464,19 @@ MainWindow::MainWindow(const QString& settings_file, const QString& open_tabs_fi
     settings_.setValue(kPaperLook, on);
     set_paper_look(on);
   });
+  QMenu* theme_menu = view->addMenu(tr("T&heme"));
+  auto* theme_group = new QActionGroup(this);
+  for (const Theme& t : themes()) {
+    const QString id = QString::fromLatin1(t.id.data(), static_cast<qsizetype>(t.id.size()));
+    QAction* a = theme_menu->addAction(QString::fromUtf8(t.name.data(), static_cast<qsizetype>(t.name.size())));
+    a->setCheckable(true);
+    a->setChecked(id == theme_);
+    theme_group->addAction(a);
+    connect(a, &QAction::triggered, this, [this, id] {
+      settings_.setValue(kTheme, id);
+      set_theme(id);
+    });
+  }
   QAction* drops = view->addAction(tr("Accept &drops"));
   drops->setCheckable(true);
   drops->setChecked(accept_drops_);
@@ -477,6 +579,33 @@ MainWindow::MainWindow(const QString& settings_file, const QString& open_tabs_fi
   table_bar->addWidget(table_button_);
   table_action_ = insert->addAction(tr("&Table..."), this, [this] { table_button_->showMenu(); });
 
+  QMenu* tools = menuBar()->addMenu(tr("&Tools"));
+  QAction* mcp_enabled_action = tools->addAction(tr("Enable &MCP Server"));
+  mcp_enabled_action->setObjectName(QStringLiteral("mcp_enabled"));
+  mcp_enabled_action->setCheckable(true);
+  mcp_enabled_action->setChecked(mcp_enabled_);
+  connect(mcp_enabled_action, &QAction::toggled, this, [this](bool on) {
+    mcp_enabled_ = on;
+    settings_.setValue(kMcpEnabled, on);
+    update_mcp_server();
+  });
+  QMenu* socket_menu = tools->addMenu(tr("MCP &Socket Folder"));
+  auto* socket_group = new QActionGroup(socket_menu);
+  mcp_default_dir_action_ = socket_menu->addAction(tr("&Default"));
+  mcp_default_dir_action_->setObjectName(QStringLiteral("mcp_socket_default"));
+  mcp_picked_dir_action_ = socket_menu->addAction(QString());
+  mcp_picked_dir_action_->setObjectName(QStringLiteral("mcp_socket_picked"));
+  for (QAction* action : {mcp_default_dir_action_, mcp_picked_dir_action_}) {
+    action->setCheckable(true);
+    socket_group->addAction(action);
+  }
+  connect(mcp_default_dir_action_, &QAction::triggered, this, [this] { set_mcp_use_socket_dir(false); });
+  connect(mcp_picked_dir_action_, &QAction::triggered, this, [this] { set_mcp_use_socket_dir(true); });
+  socket_menu->addSeparator();
+  socket_menu->addAction(tr("&Choose Folder..."), this, [this] { choose_mcp_socket_dir(); })
+      ->setObjectName(QStringLiteral("mcp_socket_choose"));
+  refresh_mcp_socket_actions();
+
   QMenu* table = menuBar()->addMenu(tr("T&able"));
   table->addAction(table_action_);
   table->addSeparator();
@@ -541,6 +670,17 @@ MainWindow::MainWindow(const QString& settings_file, const QString& open_tabs_fi
   }
   restoreState(settings_.value(kWindowState).toByteArray());
 
+  notice_label_ = new QLabel(this);
+  notice_label_->setObjectName(QStringLiteral("notice"));
+  notice_label_->setAutoFillBackground(true);
+  notice_label_->setContentsMargins(6, 0, 6, 0);
+  notice_label_->setVisible(false);
+  statusBar()->addWidget(notice_label_);
+  notice_timer_ = new QTimer(this);
+  notice_timer_->setSingleShot(true);
+  notice_timer_->setInterval(10000);
+  connect(notice_timer_, &QTimer::timeout, this, [this] { notice_label_->setVisible(false); });
+
   block_state_ = new QLabel(this);
   statusBar()->addWidget(block_state_);
   position_label_ = new QLabel(this);
@@ -554,6 +694,12 @@ MainWindow::MainWindow(const QString& settings_file, const QString& open_tabs_fi
   zoom_label_ = new QLabel(this);
   statusBar()->addPermanentWidget(zoom_label_);
   set_zoom(zoom_);
+  apply_preview_look();
+
+  preview_timer_ = new QTimer(this);
+  preview_timer_->setSingleShot(true);
+  preview_timer_->setInterval(kPreviewDelayMs);
+  connect(preview_timer_, &QTimer::timeout, this, [this] { render_preview(); });
 
   update_actions();
   update_position();
@@ -561,18 +707,14 @@ MainWindow::MainWindow(const QString& settings_file, const QString& open_tabs_fi
   update_title();
 }
 
+MainWindow::~MainWindow() = default;
+
 bool MainWindow::open_file(const QString& path) { return open_path(path, false); }
 
 bool MainWindow::open_path(const QString& path, bool quiet) {
-  const QString canonical = QFileInfo(path).canonicalFilePath();
-  if (!canonical.isEmpty()) {
-    for (int i = 0; i < tabs_->count(); ++i) {
-      DocumentTab* t = tab_at(i);
-      if (t != nullptr && !t->path().isEmpty() && QFileInfo(t->path()).canonicalFilePath() == canonical) {
-        tabs_->setCurrentIndex(i);
-        return true;
-      }
-    }
+  if (const std::optional<quint64> open = find_buffer(path)) {
+    tabs_->setCurrentWidget(tab_by_id(*open));
+    return true;
   }
   DocumentTab* current = current_tab();
   const bool reuse = current != nullptr && current->is_blank();
@@ -593,6 +735,7 @@ bool MainWindow::open_path(const QString& path, bool quiet) {
   else tabs_->setCurrentIndex(index);
   offer_path_draft(tab);
   schedule_tabs_write();
+  sync_watch();
   return true;
 }
 
@@ -621,7 +764,7 @@ void MainWindow::open_untitled_draft(const QString& id) {
   const char* state = read.state == DraftState::ok ? "ok" : read.state == DraftState::damaged ? "damaged" : "unreadable";
   lumos::log(lumos::LogLevel::debug, kComp, "draft_restore", {{"id", id.toStdString()}, {"state", state}});
   if (read.state != DraftState::ok)
-    statusBar()->showMessage(tr("A draft was damaged; its text may be incomplete."), 10000);
+    show_notice(NoticeKind::warning, tr("⚠ A draft was damaged; its text may be incomplete."));
 }
 
 void MainWindow::offer_path_draft(DocumentTab* tab) {
@@ -721,13 +864,7 @@ void MainWindow::restore_tabs() {
 
       const bool has_path = draft_read.state != DraftState::unreadable && !draft_read.draft.untitled;
       if (has_path && QFileInfo(draft_read.draft.path).isReadable()) {
-        bool path_open = false;
-        for (int i = 0; i < tabs_->count() && !path_open; ++i) {
-          DocumentTab* t = tab_at(i);
-          path_open = t != nullptr && !t->path().isEmpty() &&
-                      QFileInfo(t->path()).canonicalFilePath() == QFileInfo(draft_read.draft.path).canonicalFilePath();
-        }
-        if (path_open) {
+        if (find_buffer(draft_read.draft.path)) {
           lumos::log(lumos::LogLevel::debug, kComp, "draft_skip", {{"id", id.toStdString()}, {"reason", "open"}});
           continue;
         }
@@ -735,7 +872,8 @@ void MainWindow::restore_tabs() {
         continue;
       }
       open_untitled_draft(id);
-      if (has_path) statusBar()->showMessage(tr("The file of a draft is gone; its text opened as an Untitled tab."), 10000);
+      if (has_path)
+        show_notice(NoticeKind::info, tr("ℹ The file of a draft is gone; its text opened as an Untitled tab."));
     }
   }
   if (read.active.isEmpty()) return;
@@ -804,6 +942,7 @@ bool MainWindow::close_tab(int index) {
     update_tab_text(blank);
   }
   schedule_tabs_write();
+  sync_watch();
   lumos::log(lumos::LogLevel::debug, kComp, "tab_close", {{"tabs", std::to_string(tabs_->count())}});
   return true;
 }
@@ -850,6 +989,7 @@ void MainWindow::closeEvent(QCloseEvent* e) {
   tabs_closed_ = true;
   settings_.setValue(kGeometry, saveGeometry());
   settings_.setValue(kWindowState, saveState());
+  settings_.setValue(kPreviewShare, splitter_->preview_share());
   e->accept();
 }
 
@@ -891,6 +1031,7 @@ QFont MainWindow::current_font() const {
 
 DocumentTab* MainWindow::make_tab() {
   auto* tab = new DocumentTab(tabs_);
+  tab->set_buffer_id(next_buffer_id_++);
   using lumos::qt::SourceEditor;
   SourceEditor* editor = tab->editor();
   editor->set_line_numbers(line_numbers_);
@@ -902,10 +1043,10 @@ DocumentTab* MainWindow::make_tab() {
   editor->setContextMenuPolicy(Qt::CustomContextMenu);
   connect(editor, &QWidget::customContextMenuRequested, this, [this, tab](const QPoint& at) { context_menu(tab, at); });
   tab->set_link_open_failed(
-      [this](const QString& url) { statusBar()->showMessage(tr("Cannot open %1").arg(url), 5000); });
+      [this](const QString& url) { show_notice(NoticeKind::warning, tr("⚠ Cannot open %1").arg(url)); });
   tab->set_drafts_dir(drafts_dir_);
   tab->set_draft_changed([this] { schedule_tabs_write(); });
-  tab->set_draft_failed([this] { statusBar()->showMessage(tr("Cannot write the draft file."), 5000); });
+  tab->set_draft_failed([this] { show_notice(NoticeKind::warning, tr("⚠ Cannot write the draft file.")); });
   connect(editor, &SourceEditor::modificationChanged, this, [this, tab](bool on) {
     update_tab_text(tab);
     if (tab == current_tab()) {
@@ -918,6 +1059,7 @@ DocumentTab* MainWindow::make_tab() {
       update_actions();
       update_position();
       words_timer_->start();
+      preview_timer_->start();
     }
   });
   connect(editor, &SourceEditor::cursorPositionChanged, this, [this, tab] {
@@ -931,6 +1073,10 @@ DocumentTab* MainWindow::make_tab() {
   });
   connect(editor, &SourceEditor::canRedoChanged, this, [this, tab](bool can) {
     if (tab == current_tab()) redo_->setEnabled(can);
+  });
+  connect(editor->verticalScrollBar(), &QScrollBar::valueChanged, this, [this, tab](int) {
+    if (tab == current_tab() && !preview_->isHidden())
+      preview_->scroll_to_offset(tab->editor()->offset_at(QPoint(0, 0)));
   });
   return tab;
 }
@@ -963,14 +1109,111 @@ void MainWindow::fill_window_menu() {
     delete a;
   }
   window_tab_actions_.clear();
-  for (int i = 0; i < tabs_->count(); ++i) {
-    DocumentTab* tab = tab_at(i);
-    QAction* a = window_menu_->addAction(QString(tab->name()).replace(QLatin1Char('&'), QStringLiteral("&&")));
+  for (const BufferInfo& buffer : list_buffers()) {
+    QAction* a = window_menu_->addAction(QString(buffer.name).replace(QLatin1Char('&'), QStringLiteral("&&")));
     a->setCheckable(true);
-    a->setChecked(i == tabs_->currentIndex());
-    connect(a, &QAction::triggered, this, [this, i] { tabs_->setCurrentIndex(i); });
+    a->setChecked(buffer.current);
+    const quint64 id = buffer.id;
+    connect(a, &QAction::triggered, this, [this, id] {
+      if (DocumentTab* tab = tab_by_id(id)) tabs_->setCurrentWidget(tab);
+    });
     window_tab_actions_ << a;
   }
+}
+
+QList<BufferInfo> MainWindow::list_buffers() const {
+  QList<BufferInfo> list;
+  for (int i = 0; i < tabs_->count(); ++i) {
+    const DocumentTab* tab = tab_at(i);
+    if (tab == nullptr) continue;
+    list << BufferInfo{tab->buffer_id(), tab->path(), tab->name(), tab->editor()->is_modified(),
+                       i == tabs_->currentIndex()};
+  }
+  return list;
+}
+
+std::optional<QByteArray> MainWindow::read_buffer(quint64 id) const {
+  const DocumentTab* tab = tab_by_id(id);
+  if (tab == nullptr) return std::nullopt;
+  return QByteArray::fromStdString(tab->editor()->text());
+}
+
+std::optional<quint64> MainWindow::find_buffer(const QString& path) const {
+  if (path.isEmpty()) return std::nullopt;
+  const QString key = path_key(path);
+  for (int i = 0; i < tabs_->count(); ++i) {
+    const DocumentTab* tab = tab_at(i);
+    if (tab != nullptr && !tab->path().isEmpty() && path_key(tab->path()) == key)
+      return tab->buffer_id();
+  }
+  return std::nullopt;
+}
+
+void MainWindow::set_mcp_server_name(const QString& name) {
+  mcp_server_name_ = name;
+  update_mcp_server();
+}
+
+bool MainWindow::mcp_listening() const { return mcp_server_ && mcp_server_->is_listening(); }
+
+void MainWindow::update_mcp_server() {
+  if (!mcp_enabled_ || mcp_server_name_.isEmpty()) {
+    mcp_server_.reset();
+    return;
+  }
+  const QString name = mcp_listen_name();
+  if (mcp_server_ && mcp_server_->is_listening() && mcp_server_->name() == name) return;
+  mcp_server_ = std::make_unique<McpServer>(*this);
+  if (!mcp_server_->listen(name)) {
+    show_notice(NoticeKind::warning, tr("⚠ The MCP server cannot listen on %1.").arg(QDir::toNativeSeparators(name)));
+  }
+}
+
+QString MainWindow::mcp_listen_name() const {
+  return mcp_use_socket_dir_ ? mcp_socket_in(mcp_socket_dir_) : mcp_server_name_;
+}
+
+void MainWindow::set_mcp_use_socket_dir(bool on) {
+  mcp_use_socket_dir_ = on && !mcp_socket_dir_.isEmpty();
+  settings_.setValue(kMcpUseSocketDir, mcp_use_socket_dir_);
+  refresh_mcp_socket_actions();
+  update_mcp_server();
+}
+
+void MainWindow::choose_mcp_socket_dir() {
+  const QString start = mcp_socket_dir_.isEmpty() ? QDir::homePath() : mcp_socket_dir_;
+  const QString dir = QFileDialog::getExistingDirectory(this, tr("MCP Socket Folder"), start);
+  if (dir.isEmpty()) return;
+  mcp_socket_dir_ = QDir(dir).absolutePath();
+  settings_.setValue(kMcpSocketDir, mcp_socket_dir_);
+  set_mcp_use_socket_dir(true);
+
+  QString arg = QDir::toNativeSeparators(mcp_socket_dir_);
+  static const QRegularExpression plain(QStringLiteral("^[A-Za-z0-9/._+-]+$"));
+  if (!plain.match(arg).hasMatch()) arg = "'" + arg.replace("'", "'\\''") + "'";
+  QMessageBox box(QMessageBox::Information, tr("MCP Socket Folder"),
+                  tr("lumos-md listens on %1 while Tools, Enable MCP Server is on. In the agent's settings, "
+                     "start the MCP server with this command:")
+                      .arg(QDir::toNativeSeparators(mcp_socket_in(mcp_socket_dir_))),
+                  QMessageBox::Ok, this);
+  box.setInformativeText(QStringLiteral("lumos-md --mcp --mcp-dir ") + arg);
+  box.setTextInteractionFlags(Qt::TextSelectableByMouse);
+  box.exec();
+}
+
+void MainWindow::refresh_mcp_socket_actions() {
+  if (mcp_default_dir_action_ == nullptr) return;
+  mcp_picked_dir_action_->setText(QDir::toNativeSeparators(mcp_socket_dir_).replace('&', QStringLiteral("&&")));
+  mcp_picked_dir_action_->setVisible(!mcp_socket_dir_.isEmpty());
+  (mcp_use_socket_dir_ ? mcp_picked_dir_action_ : mcp_default_dir_action_)->setChecked(true);
+}
+
+DocumentTab* MainWindow::tab_by_id(quint64 id) const {
+  for (int i = 0; i < tabs_->count(); ++i) {
+    DocumentTab* tab = tab_at(i);
+    if (tab != nullptr && tab->buffer_id() == id) return tab;
+  }
+  return nullptr;
 }
 
 void MainWindow::set_paper_look(bool on) {
@@ -979,6 +1222,15 @@ void MainWindow::set_paper_look(bool on) {
     tab->editor()->set_style_table(on ? paper_styles(tab->editor()->font(), tab->editor()->palette())
                                       : lumos::qt::StyleTable::make_default(tab->editor()->font(), tab->editor()->palette()));
   });
+  apply_preview_look();
+}
+
+void MainWindow::set_theme(const QString& id) {
+  const Theme& theme = find_theme(id);
+  theme_ = QString::fromLatin1(theme.id.data(), static_cast<qsizetype>(theme.id.size()));
+  apply_theme(theme);
+  if (paper_look_) set_paper_look(true);
+  apply_preview_look();
 }
 
 void MainWindow::choose_font() {
@@ -1007,10 +1259,53 @@ void MainWindow::set_zoom(double zoom) {
   zoom_label_->setText(tr("%1%").arg(std::lround(zoom_ * 100)));
 }
 
+void MainWindow::apply_preview_look() {
+  QFont f = QApplication::font();
+  f.setPointSizeF(font_size_ * zoom_);
+  preview_->setFont(f);
+  const QPalette pal = palette();
+  const QColor base = pal.color(QPalette::Active, QPalette::Base);
+  const QColor text = pal.color(QPalette::Active, QPalette::Text);
+  const QColor page = mix(base, QColor(0xc8, 0xa0, 0x58), paper_look_ ? 0.1 : 0.05);
+  preview_->set_look(page, mix(page, text, 0.35), mix(page, text, 0.07));
+  preview_box_->layout()->setContentsMargins(0, tabs_->tabBar()->sizeHint().height(), 0, 0);
+  render_preview();
+}
+
+void MainWindow::set_preview_shown(bool on) {
+  if (on) {
+    preview_box_->show();
+    preview_->show();
+    splitter_->restore_split();
+  } else {
+    preview_box_->hide();  
+    preview_->hide();
+    preview_stale_ = true;
+  }
+}
+
+void MainWindow::render_preview() {
+  DocumentTab* const tab = current_tab();
+  if (tab == nullptr || preview_->isHidden() || preview_->width() <= 0) {
+    preview_stale_ = true;
+    return;
+  }
+  preview_->show_document(tab->editor()->document(), tab->path());
+  preview_->scroll_to_offset(tab->editor()->offset_at(QPoint(0, 0)));
+  preview_stale_ = false;
+}
+
+void MainWindow::on_preview_size_changed() {
+  const bool shown = !preview_->isHidden() && preview_->width() > 0;
+  if (shown && preview_stale_) render_preview();
+  else if (!shown) preview_stale_ = true;
+}
+
 void MainWindow::apply_font() {
   const QFont f = current_font();
   for_each_tab([&f](DocumentTab* tab) { tab->editor()->setFont(f); });
   if (paper_look_) set_paper_look(true);
+  apply_preview_look();
   lumos::log(lumos::LogLevel::debug, kComp, "font",
              {{"size", QString::number(font_size_).toStdString()}, {"zoom", QString::number(zoom_).toStdString()}});
 }
@@ -1083,6 +1378,225 @@ void MainWindow::revert() {
   update_words();
 }
 
+void MainWindow::show_notice(NoticeKind kind, const QString& text) {
+  notice_label_->setText(text);
+  QPalette pal = notice_label_->palette();
+  if (kind == NoticeKind::info) {
+    pal.setColor(QPalette::Window, pal.color(QPalette::Highlight));
+    pal.setColor(QPalette::WindowText, pal.color(QPalette::HighlightedText));
+  } else {
+    pal.setColor(QPalette::Window, QColor(0xff, 0xd5, 0x4f));
+    pal.setColor(QPalette::WindowText, Qt::black);
+  }
+  notice_label_->setPalette(pal);
+  notice_label_->setVisible(true);
+  notice_timer_->start();
+}
+
+void MainWindow::sync_watch() {
+  QStringList files;
+  QStringList dirs;
+  for (int i = 0; i < tabs_->count(); ++i) {
+    DocumentTab* tab = tab_at(i);
+    if (tab == nullptr || tab->path().isEmpty()) continue;
+    if (QFileInfo::exists(tab->path())) files << tab->path();
+    const QString dir = QFileInfo(tab->path()).absolutePath();
+    if (!dirs.contains(dir)) dirs << dir;
+  }
+  const QStringList old_files = file_watcher_->files();
+  const QStringList old_dirs = file_watcher_->directories();
+  QStringList remove_files;
+  QStringList add_files;
+  for (const QString& f : old_files) {
+    if (!files.contains(f)) remove_files << f;
+  }
+  for (const QString& f : files) {
+    if (!old_files.contains(f)) add_files << f;
+  }
+  QStringList remove_dirs;
+  QStringList add_dirs;
+  for (const QString& d : old_dirs) {
+    if (!dirs.contains(d)) remove_dirs << d;
+  }
+  for (const QString& d : dirs) {
+    if (!old_dirs.contains(d)) add_dirs << d;
+  }
+  if (!remove_files.isEmpty()) file_watcher_->removePaths(remove_files);
+  if (!add_files.isEmpty()) file_watcher_->addPaths(add_files);
+  if (!remove_dirs.isEmpty()) file_watcher_->removePaths(remove_dirs);
+  if (!add_dirs.isEmpty()) file_watcher_->addPaths(add_dirs);
+}
+
+MainWindow::ChangedAnswer MainWindow::ask_changed(DocumentTab* tab, bool from_save) {
+  disk_dialog_open_ = true;
+  const auto read_file = [&](QByteArray* out) {
+    QFile f(tab->path());
+    if (!f.open(QIODevice::ReadOnly)) return false;
+    *out = f.readAll();
+    return true;
+  };
+  for (;;) {
+    QByteArray seen;
+    if (!read_file(&seen)) {
+      disk_dialog_open_ = false;
+      return ChangedAnswer::cancel;
+    }
+    const QByteArray seen_sha = sha256_hex(seen);
+    const std::string yours = tab->editor()->text();
+    const LineMerge merge =
+        merge_lines(std::string_view(tab->base().constData(), static_cast<std::size_t>(tab->base().size())), yours,
+                    std::string_view(seen.constData(), static_cast<std::size_t>(seen.size())));
+    const QString title = from_save ? tr("Save") : tr("File changed");
+    const QString text = from_save
+                              ? tr("%1 was changed on disk since it was opened or saved.").arg(tab->name())
+                              : tr("%1 was changed on disk.").arg(tab->name());
+    QMessageBox box(QMessageBox::Warning, title, text, QMessageBox::NoButton, this);
+    QString info = tr("Show diff shows both texts and merges them. Save as shown writes your text over the file. "
+                       "Load changes loads the file; Undo then gives your text back.");
+    if (merge.too_many) {
+      info += QLatin1Char('\n') + tr("The changes are too many to show.");
+      lumos::log(lumos::LogLevel::debug, kComp, "disk_merge_too_many");
+    }
+    box.setInformativeText(info);
+    QPushButton* diff_button = box.addButton(tr("Show diff"), QMessageBox::AcceptRole);
+    diff_button->setEnabled(!merge.too_many);
+    QPushButton* save_button = box.addButton(tr("Save as shown"), QMessageBox::AcceptRole);
+    save_button->setEnabled(!tab->read_only_file());
+    QPushButton* load_button = box.addButton(tr("Load changes"), QMessageBox::AcceptRole);
+    QPushButton* cancel_button = box.addButton(tr("Cancel"), QMessageBox::RejectRole);
+    box.setDefaultButton((!from_save && !merge.too_many) ? diff_button : cancel_button);
+    box.setEscapeButton(cancel_button);
+    box.exec();
+    QAbstractButton* clicked = box.clickedButton();
+    if (clicked == diff_button) {
+      MergeWindow window(merge, tab->name(), MergeNames{tr("On disk")}, this);
+      lumos::log(
+          lumos::LogLevel::debug, kComp, "disk_merge_open",
+          {{"chunks", std::to_string(merge.chunks.size())}, {"conflicts", std::to_string(merge.conflicts())}});
+      if (window.exec() != QDialog::Accepted) continue;  
+      const std::string result = window.result();
+      const QByteArray result_bytes(result.data(), static_cast<qsizetype>(result.size()));
+      const bool modified = result_bytes != seen;
+      tab->use_merge(result_bytes, seen);
+      lumos::log(lumos::LogLevel::debug, kComp, "disk_merge_use",
+                 {{"bytes", std::to_string(result.size())}, {"modified", modified ? "1" : "0"}});
+      update_tab_text(tab);
+      update_title();
+      update_actions();
+      update_words();
+      show_notice(NoticeKind::info, tr("ℹ %1: merged with the file on disk. Save writes the result.").arg(tab->name()));
+      disk_dialog_open_ = false;
+      return ChangedAnswer::merged;
+    }
+    if (clicked == save_button) {
+      QByteArray now;
+      if (!read_file(&now)) {
+        disk_dialog_open_ = false;
+        return ChangedAnswer::cancel;
+      }
+      if (sha256_hex(now) != seen_sha) continue;  
+      const bool written = write_tab(tab, tab->path());
+      lumos::log(lumos::LogLevel::debug, kComp, "disk_save_shown", {{"ok", written ? "1" : "0"}});
+      disk_dialog_open_ = false;
+      return written ? ChangedAnswer::saved : ChangedAnswer::cancel;
+    }
+    if (clicked == load_button) {
+      tab->reload_from_disk(seen);
+      update_tab_text(tab);
+      update_title();
+      update_actions();
+      update_words();
+      show_notice(NoticeKind::info,
+                  tr("↻ %1 was reloaded: it changed on disk. Undo gives your text back.").arg(tab->name()));
+      disk_dialog_open_ = false;
+      return ChangedAnswer::loaded;
+    }
+    if (!from_save) {
+      tab->set_kept_sha256(seen_sha);
+      lumos::log(lumos::LogLevel::debug, kComp, "disk_keep");
+    }
+    disk_dialog_open_ = false;
+    return ChangedAnswer::cancel;
+  }
+}
+
+void MainWindow::handle_current() {
+  if (!isActiveWindow() || disk_dialog_open_ || QApplication::activeModalWidget() != nullptr) return;
+  DocumentTab* tab = current_tab();
+  if (tab == nullptr) return;
+  auto reload = [this, tab] {
+    QFile f(tab->path());
+    if (!f.open(QIODevice::ReadOnly)) return;  
+    tab->reload_from_disk(f.readAll());
+    update_tab_text(tab);
+    update_title();
+    update_actions();
+    update_words();
+    show_notice(NoticeKind::info,
+                tr("↻ %1 was reloaded: it changed on disk. Undo gives your text back.").arg(tab->name()));
+    sync_watch();
+  };
+  if (tab->disk_pending() == DiskState::changed && !tab->editor()->is_modified()) {
+    reload();
+    return;
+  }
+  if (tab->disk_pending() == DiskState::changed) {
+    lumos::log(lumos::LogLevel::debug, kComp, "disk_changed", {{"modified", "1"}});
+    ask_changed(tab, false);
+    tab->set_disk_pending(DiskState::same);
+    watch_timer_->start();
+    return;
+  }
+  if (tab->disk_pending() == DiskState::gone) {
+    lumos::log(lumos::LogLevel::debug, kComp, "disk_gone");
+    QMessageBox box(QMessageBox::Warning, tr("File gone"), tr("%1 was deleted or moved.").arg(tab->name()),
+                    QMessageBox::NoButton, this);
+    box.setInformativeText(tr("Keep in editor keeps the text; Save writes the file again."));
+    QPushButton* keep_button = box.addButton(tr("Keep in editor"), QMessageBox::AcceptRole);
+    box.addButton(tr("Close"), QMessageBox::DestructiveRole);
+    box.setDefaultButton(keep_button);
+    box.setEscapeButton(keep_button);
+    disk_dialog_open_ = true;
+    box.exec();
+    disk_dialog_open_ = false;
+    if (box.clickedButton() == keep_button) {
+      tab->editor()->mark_unsaved();
+      tab->write_draft_now();
+      tab->set_gone_kept(true);
+      tab->set_disk_pending(DiskState::same);
+      update_tab_text(tab);
+      update_title();
+      lumos::log(lumos::LogLevel::debug, kComp, "disk_keep", {{"gone", "1"}});
+    } else {
+      close_tab(tabs_->indexOf(tab));
+    }
+    watch_timer_->start();
+    return;
+  }
+}
+
+void MainWindow::check_files() {
+  for (int i = 0; i < tabs_->count(); ++i) {
+    DocumentTab* tab = tab_at(i);
+    if (tab == nullptr || tab->path().isEmpty()) continue;
+    if (tab->update_read_only_file() && tab == current_tab()) update_title();
+    const DiskCheck result = check_disk(tab->path(), tab->saved_sha256(), tab->kept_sha256());
+    if (result.state == DiskState::gone) {
+      tab->set_disk_pending(tab->gone_kept() ? DiskState::same : DiskState::gone);
+    } else {
+      if (tab->gone_kept()) tab->set_gone_kept(false);
+      tab->set_disk_pending(result.state);
+    }
+  }
+  handle_current();
+  sync_watch();
+}
+
+void MainWindow::changeEvent(QEvent* e) {
+  QMainWindow::changeEvent(e);
+  if (e->type() == QEvent::ActivationChange && isActiveWindow()) watch_timer_->start();
+}
+
 void MainWindow::about() {
   QMessageBox::about(this, tr("About lumos-md"),
                      tr("<b>lumos-md %1</b><p>A Markdown editor.</p><p>License: GNU AGPL 3.0</p>")
@@ -1104,6 +1618,7 @@ void MainWindow::update_actions() {
   cut_->setEnabled(sel && !ro);
   copy_->setEnabled(sel);
   paste_->setEnabled(!ro);
+  paste_html_->setEnabled(!ro && clipboard_html_);
 
   const lumos::Format f = lumos::format_at(editor->document(), editor->selection());
   const std::pair<QAction*, bool> states[] = {
@@ -1168,6 +1683,9 @@ void MainWindow::context_menu(DocumentTab* tab, const QPoint& at) {
   menu.addAction(cut_);
   menu.addAction(copy_);
   menu.addAction(paste_);
+  menu.addAction(paste_html_);
+  menu.addSeparator();
+  menu.addAction(show_preview_);
   const std::size_t offset = editor->offset_at(at);
   const lumos::Selection sel{offset, offset};
   for (const lumos::ByteRange& r : editor->marks(1)) {
@@ -1182,6 +1700,19 @@ void MainWindow::context_menu(DocumentTab* tab, const QPoint& at) {
     break;
   }
   menu.exec(editor->viewport()->mapToGlobal(at));
+  update_actions();
+}
+
+void MainWindow::paste_from_html() {
+  lumos::qt::SourceEditor* editor = current_tab()->editor();
+  const QMimeData* mime = QGuiApplication::clipboard()->mimeData();
+  if (editor->is_read_only() || mime == nullptr || !mime->hasHtml()) return;
+  std::optional<lumos::CommandResult> result =
+      paste_html(editor->document(), editor->selection(), mime->html(), editor->newline());
+  if (result)
+    editor->apply_command(std::move(result));
+  else
+    editor->paste();
   update_actions();
 }
 
@@ -1315,21 +1846,35 @@ void MainWindow::show_properties() {
 
 bool MainWindow::save(DocumentTab* tab) {
   if (tab->path().isEmpty()) return save_as(tab);
+  if (tab->update_read_only_file() && tab == current_tab()) update_title();
+  if (tab->read_only_file()) return save_as(tab);
+  const DiskCheck result = check_disk(tab->path(), tab->saved_sha256(), tab->kept_sha256());
+  if (result.state == DiskState::changed) return ask_changed(tab, true) == ChangedAnswer::saved;
   return write_tab(tab, tab->path());
 }
 
 bool MainWindow::save_as(DocumentTab* tab) {
   const QString path = QFileDialog::getSaveFileName(this, tr("Save As"), tab->path());
   if (path.isEmpty()) return false;
+  const std::optional<quint64> open = find_buffer(path);
+  if (open && *open != tab->buffer_id()) {
+    lumos::log(lumos::LogLevel::debug, kComp, "save_as_refused", {{"reason", "open_in_other_tab"}});
+    QMessageBox::warning(this, tr("Save As"),
+                         tr("%1 is open in another tab. Close that tab first, or choose another name.")
+                             .arg(QFileInfo(path).fileName()));
+    return false;
+  }
   if (!write_tab(tab, path)) return false;
   tab->set_path(path);
   schedule_tabs_write();
+  sync_watch();
   settings_.sync();
   set_recent_files(add_recent_file(settings_.value(kRecentFiles).toStringList(), path));
   update_tab_text(tab);
   if (tab == current_tab()) {
     update_title();
     update_actions();
+    render_preview();
   }
   return true;
 }
@@ -1356,6 +1901,7 @@ bool MainWindow::maybe_save(DocumentTab* tab) {
 
 void MainWindow::update_title() {
   DocumentTab* tab = current_tab();
-  setWindowTitle(tr("%1[*] - lumos-md").arg(tab->name()));
+  setWindowTitle((tab->read_only_file() ? tr("%1[*] [Read-Only] - lumos-md") : tr("%1[*] - lumos-md"))
+                     .arg(tab->name()));
   setWindowModified(tab->editor()->is_modified());
 }

@@ -1,0 +1,35 @@
+# Maintainer: confund0 <110197472+confund0@users.noreply.github.com>
+pkgname=lumos-md
+pkgver=0.3.0
+pkgrel=1
+pkgdesc="Markdown editor that keeps the source text as the only truth"
+arch=('x86_64')
+url="https://github.com/confund0/lumos-md"
+license=('AGPL-3.0-only' 'Unicode-3.0' 'CC-BY-4.0')
+depends=('glibc' 'hicolor-icon-theme' 'libgcc' 'libstdc++' 'pcre2' 'qt6-base')
+makedepends=('catch2' 'cmake' 'ninja')
+checkdepends=('ttf-dejavu')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/confund0/lumos-md/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+	cmake -B build -S "$pkgname-$pkgver" -G Ninja \
+		-DCMAKE_BUILD_TYPE=None \
+		-DCMAKE_INSTALL_PREFIX=/usr \
+		-DFETCHCONTENT_FULLY_DISCONNECTED=ON \
+		-DLUMOS_WERROR=OFF \
+		-DLUMOS_BUILD_BENCH=OFF \
+		-DLUMOS_BUILD_TESTS=ON
+	cmake --build build
+}
+
+check() {
+	ctest --test-dir build -j"$(nproc)" --output-on-failure
+}
+
+package() {
+	DESTDIR="$pkgdir" cmake --install build
+	cd "$pkgname-$pkgver"
+	install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" \
+		LICENSE THIRD_PARTY.md LICENSES/Unicode-3.0.txt LICENSES/CC-BY-4.0.txt
+}

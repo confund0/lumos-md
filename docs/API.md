@@ -44,7 +44,8 @@ off; `LUMOS_BUILD_QT` (default on) builds the Qt adapter.
 - `apply(edit)` applies one edit; `begin()` and `commit()` group edits
   into one undo step.
 - `undo()`, `redo()`, `can_undo()`, `can_redo()`, `set_max_undo(steps)`.
-- `mark_saved()`, `modified()`.
+- `mark_saved()`, `modified()`; `mark_unsaved()` (the file is gone:
+  `modified()` stays true until the next `load()` or `mark_saved()`).
 - `add_listener(listener)` gives an id for `remove_listener(id)`. A
   listener is called after each change with a `Change` (kind, edits,
   changed tree regions, version).
@@ -135,6 +136,15 @@ host applies the edits as one undo step.
 - `node_hook` is called for each node: it can write the node's tags
   (`replace_tags`) or the whole node (`replace_all`), for example task
   items with the host's own check boxes.
+- `output_cap` (16 MiB by default, 0 for none): over the cap the call
+  writes nothing. `render_html(tree, text, options, out)` then returns
+  false and leaves `out` as it was; the form that returns a string
+  gives an empty string. A short note with many reference links to one
+  long definition can expand to gigabytes of HTML.
+- `source_anchors` writes an empty `<a name="lumos-N"></a>` at the
+  start of each paragraph, heading, code block and table row, where N
+  is the node's start byte offset. A view finds the place of a source
+  offset in the HTML with them.
 
 ## Log (`lumos/log.hpp`)
 
@@ -161,7 +171,8 @@ boundaries. All positions are UTF-8 byte offsets, as in the core.
     changed middle is edited, so the cursor stays.
   - `insert_text(text)`: replaces the selection; one undo step.
   - `text()` (a copy, for saving), `length()`.
-  - `is_modified()`, `mark_saved()` (keeps the undo history).
+  - `is_modified()`, `mark_saved()` (keeps the undo history),
+    `mark_unsaved()` (the file is gone).
   - `wipe()`: `Document::wipe()` for the editor; the editor is then
     empty. Qt's own copies (layouts, clipboard) are not wiped.
 - Line endings: `text()` gives the exact bytes. Enter and paste write

@@ -47,6 +47,7 @@ class SourceEditor : public QAbstractScrollArea {
 
   bool is_modified() const { return doc_.modified(); }
   void mark_saved();
+  void mark_unsaved();
 
   bool canUndo() const;
   bool canRedo() const;

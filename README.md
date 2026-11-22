@@ -21,7 +21,8 @@ tree as a full parse.
 - Find and replace: literal or regex, Unicode case folding, whole words,
   replace all as one undo step.
 - Document tools: counts, link targets, diagnostics.
-- HTML renderer with host hooks for URLs and nodes.
+- HTML renderer with host hooks for URLs and nodes, an output cap and
+  source offset anchors.
 - Qt 6 widget `SourceEditor`: source mode with syntax highlighting, own
   text layout, IME, bidi text, drag and drop, find marks, line numbers,
   a centred text column, pictures below their Markdown images, Ctrl+click
@@ -44,7 +45,15 @@ ctest --test-dir build --output-on-failure
 The editor app is `build/app/lumos-md [file.md]`. It opens files in
 tabs of one window: a second start opens its files there. A few seconds
 after an edit, the unsaved text goes to a draft file; after a crash, the
-next start offers to recover it. It logs to
+next start offers to recover it. A file that changes on disk loads
+again as one undo step; a tab with unsaved changes asks first. Edit,
+Paste from HTML (Ctrl+Alt+V) pastes a copy from a web page as Markdown.
+View, Show Preview shows the current tab as HTML next to the editor;
+View, Theme picks the colours. AI agents can read the open files, with
+unsaved changes, through MCP (Tools, Enable MCP Server; off by
+default): add the command `lumos-md --mcp` as a stdio MCP server in the
+agent's settings. An agent's change to an open file shows as a change
+on disk, so the user accepts it or picks parts of it. lumos-md logs to
 `~/.local/state/lumos-md/lumos-md.log`. For debug lines, add
 `debug=true` under `[log]` in `~/.config/lumos-md/lumos-md.ini`.
 

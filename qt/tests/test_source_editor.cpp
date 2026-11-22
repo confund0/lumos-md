@@ -60,6 +60,16 @@ void type_key(QWidget* w, const QString& text) {
 
 void key(QWidget* w, Qt::Key k, Qt::KeyboardModifiers mods = Qt::NoModifier) { QTest::keyClick(w, k, mods); }
 
+bool drag_enter(QWidget* w, QPoint at, const QMimeData* mime) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 12, 0)
+  QDragEnterEvent enter(QPointF(at), Qt::CopyAction, mime, Qt::NoButton, Qt::NoModifier);
+#else
+  QDragEnterEvent enter(at, Qt::CopyAction, mime, Qt::NoButton, Qt::NoModifier);
+#endif
+  QApplication::sendEvent(w, &enter);
+  return enter.isAccepted();
+}
+
 void check_editor(const SourceEditor& ed) {
   const std::string t = ed.text();
   QCOMPARE(ed.document().buffer().text(), t);
@@ -221,6 +231,14 @@ void TestSourceEditor::load_save_keeps_bytes() {
   ed.undo();
   QCOMPARE(ed.text(), bytes);
   QVERIFY(!ed.is_modified());
+
+  QSignalSpy modified(&ed, &SourceEditor::modificationChanged);
+  ed.mark_unsaved();
+  QVERIFY(ed.is_modified());
+  QCOMPARE(modified.count(), 1);
+  ed.mark_saved();
+  QVERIFY(!ed.is_modified());
+  QCOMPARE(modified.count(), 2);
 
   const QString out = QDir(QDir::tempPath()).filePath("lumos-roundtrip.md");
   {
@@ -1747,9 +1765,7 @@ void TestSourceEditor::external_drop() {
   const QPoint at(1, top + lh + lh / 2);  
 
   const auto drop_at = [&](QMimeData& mime) {
-    QDragEnterEvent enter(at, Qt::CopyAction, &mime, Qt::NoButton, Qt::NoModifier);
-    QApplication::sendEvent(ed.viewport(), &enter);
-    QVERIFY(enter.isAccepted());
+    QVERIFY(drag_enter(ed.viewport(), at, &mime));
     QDropEvent drop(QPointF(at), Qt::CopyAction, &mime, Qt::NoButton, Qt::NoModifier);
     QApplication::sendEvent(ed.viewport(), &drop);
     QVERIFY(drop.isAccepted());
@@ -1801,18 +1817,14 @@ void TestSourceEditor::drop_ignored_read_only_or_disabled() {
   const std::string before = ed.text();
 
   ed.set_read_only(true);
-  QDragEnterEvent enter1(at, Qt::CopyAction, &mime, Qt::NoButton, Qt::NoModifier);
-  QApplication::sendEvent(ed.viewport(), &enter1);
-  QVERIFY(!enter1.isAccepted());
+  QVERIFY(!drag_enter(ed.viewport(), at, &mime));
   QDropEvent drop1(QPointF(at), Qt::CopyAction, &mime, Qt::NoButton, Qt::NoModifier);
   QApplication::sendEvent(ed.viewport(), &drop1);
   QCOMPARE(ed.text(), before);
   ed.set_read_only(false);
 
   ed.setAcceptDrops(false);
-  QDragEnterEvent enter2(at, Qt::CopyAction, &mime, Qt::NoButton, Qt::NoModifier);
-  QApplication::sendEvent(ed.viewport(), &enter2);
-  QVERIFY(!enter2.isAccepted());
+  QVERIFY(!drag_enter(ed.viewport(), at, &mime));
   QDropEvent drop2(QPointF(at), Qt::CopyAction, &mime, Qt::NoButton, Qt::NoModifier);
   QApplication::sendEvent(ed.viewport(), &drop2);
   QCOMPARE(ed.text(), before);
@@ -1876,8 +1888,7 @@ void TestSourceEditor::logs_carry_no_text() {
   QMimeData mime;
   mime.setText("QZXMARK dropped");
   const QPoint at(1, ed.cursor_rect().y());
-  QDragEnterEvent enter(at, Qt::CopyAction, &mime, Qt::NoButton, Qt::NoModifier);
-  QApplication::sendEvent(ed.viewport(), &enter);
+  drag_enter(ed.viewport(), at, &mime);
   QDropEvent drop(QPointF(at), Qt::CopyAction, &mime, Qt::NoButton, Qt::NoModifier);
   QApplication::sendEvent(ed.viewport(), &drop);
   QVERIFY(drop.isAccepted());

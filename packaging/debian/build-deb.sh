@@ -12,6 +12,11 @@ case $debver in
 *) echo "FATAL: debian/changelog version $debver does not match CMake version $ver" >&2; exit 1 ;;
 esac
 
+# dpkg-buildpackage counts all online CPUs, also in a container pinned
+# to fewer; nproc counts the pinned ones.
+DEB_BUILD_OPTIONS=${DEB_BUILD_OPTIONS:-parallel=$(nproc)}
+export DEB_BUILD_OPTIONS
+
 mkdir -p "$out"
 log=$out/build.log
 work=$out/work
@@ -28,7 +33,7 @@ if ! (cd "$tree" && dpkg-checkbuilddeps) >"$log" 2>&1; then
 	exit 1
 fi
 if ! (cd "$tree" && dpkg-buildpackage -us -uc -b) >>"$log" 2>&1; then
-	grep -nE 'error|Error|FAILED|\*\*\*' "$log" | head -20 >&2
+	grep -nE '[Ee]rror:|Error [0-9]|FAILED|\*\*\*Failed|FAIL!' "$log" | head -20 >&2
 	echo "FAIL: full log in $log" >&2
 	exit 1
 fi

@@ -4,6 +4,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QLabel>
 #include <QList>
 #include <QMessageBox>
 #include <QStatusBar>
@@ -16,6 +17,7 @@
 #include <string_view>
 #include <vector>
 
+#include "dialog_util.hpp"
 #include "document_tab.hpp"
 #include "drafts.hpp"
 #include "lumos/log.hpp"
@@ -34,58 +36,6 @@ QString write_file(const QDir& dir, const QString& name, const QString& text) {
   f.write(text.toUtf8());
   f.close();
   return path;
-}
-
-void click_dialogs(QList<QMessageBox::StandardButton> buttons) {
-  auto queue = std::make_shared<QList<QMessageBox::StandardButton>>(std::move(buttons));
-  auto* timer = new QTimer();
-  timer->setInterval(10);
-  QObject::connect(timer, &QTimer::timeout, [timer, queue] {
-    auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
-    if (box == nullptr || queue->isEmpty()) return;
-    QAbstractButton* button = box->button(queue->takeFirst());
-    if (button != nullptr) button->click();
-    if (queue->isEmpty()) {
-      timer->stop();
-      timer->deleteLater();
-    }
-  });
-  timer->start();
-}
-
-void click_dialog(QMessageBox::StandardButton button) { click_dialogs({button}); }
-
-void click_dialog_text(const QString& button_text, QString* text = nullptr, QString* informative = nullptr) {
-  auto* timer = new QTimer();
-  timer->setInterval(10);
-  QObject::connect(timer, &QTimer::timeout, [timer, button_text, text, informative] {
-    auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
-    if (box == nullptr) return;
-    if (text != nullptr) *text = box->text();
-    if (informative != nullptr) *informative = box->informativeText();
-    for (QAbstractButton* button : box->buttons()) {
-      if (button->text() == button_text) {
-        button->click();
-        break;
-      }
-    }
-    timer->stop();
-    timer->deleteLater();
-  });
-  timer->start();
-}
-
-void escape_dialog() {
-  auto* timer = new QTimer();
-  timer->setInterval(10);
-  QObject::connect(timer, &QTimer::timeout, [timer] {
-    auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
-    if (box == nullptr) return;
-    QTest::keyClick(box, Qt::Key_Escape);
-    timer->stop();
-    timer->deleteLater();
-  });
-  timer->start();
 }
 
 QString draft_file(const QString& drafts_dir, const QString& id) { return QDir(drafts_dir).filePath(id + QStringLiteral(".draft")); }
@@ -757,8 +707,9 @@ void TestDraftsWindow::restore_tabs_opens_gone_path_draft_as_untitled() {
   }
   QVERIFY(found);
   QVERIFY(QFile::exists(draft_file(drafts_dir, id)));
-  QCOMPARE(window.statusBar()->currentMessage(),
-           QObject::tr("The file of a draft is gone; its text opened as an Untitled tab."));
+  auto* notice = window.findChild<QLabel*>(QStringLiteral("notice"));
+  QVERIFY(notice != nullptr);
+  QCOMPARE(notice->text(), QObject::tr("ℹ The file of a draft is gone; its text opened as an Untitled tab."));
 }
 
 void TestDraftsWindow::restore_tabs_skips_older_draft_of_open_path() {

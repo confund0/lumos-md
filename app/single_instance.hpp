@@ -10,7 +10,8 @@
 class QLocalSocket;
 class QTimer;
 
-QString instance_server_name(const QString& state_dir, const QString& runtime_dir);
+QString instance_server_name(const QString& state_dir, const QString& runtime_dir,
+                              const QString& prefix = QStringLiteral("lumos-md-"));
 
 enum class SendResult { sent, no_server, failed };
 

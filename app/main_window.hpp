@@ -1,18 +1,24 @@
 #pragma once
 
+#include <QByteArray>
 #include <QList>
 #include <QMainWindow>
 #include <QSettings>
 #include <QString>
 
 #include <functional>
+#include <memory>
 #include <optional>
 
 #include "lumos/commands.hpp"
 
 class DocumentTab;
+class McpServer;
+class PreviewSplitter;
+class PreviewView;
 class QAction;
 class QComboBox;
+class QFileSystemWatcher;
 class QFont;
 class QLabel;
 class QMenu;
@@ -20,10 +26,19 @@ class QTabWidget;
 class QTimer;
 class QToolButton;
 
+struct BufferInfo {
+  quint64 id = 0;
+  QString path;  
+  QString name;  
+  bool modified = false;
+  bool current = false;
+};
+
 class MainWindow : public QMainWindow {
  public:
   explicit MainWindow(const QString& settings_file, const QString& open_tabs_file = QString(),
                        const QString& drafts_dir = QString());
+  ~MainWindow() override;
 
   bool open_file(const QString& path);
   void restore_tabs();
@@ -36,9 +51,21 @@ class MainWindow : public QMainWindow {
   DocumentTab* current_tab() const;
   DocumentTab* tab_at(int index) const;
   const QStringList& closed_tabs() const { return closed_tabs_; }
+  QTabWidget* tabs_for_tests() const { return tabs_; }
+  PreviewView* preview_for_tests() const { return preview_; }
+  PreviewSplitter* preview_splitter_for_tests() const { return splitter_; }
+  void check_files();
+
+  QList<BufferInfo> list_buffers() const;
+  std::optional<QByteArray> read_buffer(quint64 id) const;
+  std::optional<quint64> find_buffer(const QString& path) const;
+
+  void set_mcp_server_name(const QString& name);
+  bool mcp_listening() const;
 
  protected:
   void closeEvent(QCloseEvent* e) override;
+  void changeEvent(QEvent* e) override;
 
  private:
   bool open_path(const QString& path, bool quiet);
@@ -54,6 +81,12 @@ class MainWindow : public QMainWindow {
   void fill_recent_menu();
   void set_recent_files(const QStringList& list);
   void revert();
+  enum class NoticeKind { info, warning };
+  void show_notice(NoticeKind kind, const QString& text);
+  void sync_watch();
+  void handle_current();
+  enum class ChangedAnswer { saved, merged, loaded, cancel };
+  ChangedAnswer ask_changed(DocumentTab* tab, bool from_save);
   void about();
   void update_actions();
   void update_position();
@@ -64,6 +97,7 @@ class MainWindow : public QMainWindow {
   void set_heading(int level);
   void insert_table(int rows, int cols);
   void table_move(std::optional<lumos::CommandResult> result);
+  void paste_from_html();
   void toggle_link();
   void insert_picture();
   void show_properties();
@@ -73,21 +107,33 @@ class MainWindow : public QMainWindow {
   bool maybe_save(DocumentTab* tab);
   void update_title();
   void set_paper_look(bool on);
+  void set_theme(const QString& id);
   void choose_font();
   void set_zoom(double zoom);
   void apply_font();
+  void apply_preview_look();
+  void set_preview_shown(bool on);
+  void render_preview();
+  void on_preview_size_changed();
   bool eventFilter(QObject* watched, QEvent* e) override;
   QFont current_font() const;
   DocumentTab* make_tab();
+  DocumentTab* tab_by_id(quint64 id) const;
   void for_each_tab(const std::function<void(DocumentTab*)>& fn);
   void update_tab_text(DocumentTab* tab);
   void refresh_for_current_tab();
   void fill_window_menu();
+  void update_mcp_server();
+  QString mcp_listen_name() const;
+  void set_mcp_use_socket_dir(bool on);
+  void choose_mcp_socket_dir();
+  void refresh_mcp_socket_actions();
 
   QSettings settings_;
   QString open_tabs_file_;
   QString drafts_dir_;
   QStringList closed_tabs_;
+  quint64 next_buffer_id_ = 1;
   QToolButton* reopen_button_ = nullptr;
   QAction* reopen_action_ = nullptr;
   QStringList other_start_queue_;
@@ -101,6 +147,7 @@ class MainWindow : public QMainWindow {
   double zoom_ = 1.0;
   int wheel_delta_ = 0;  
   bool paper_look_ = false;
+  QString theme_;  
   bool line_numbers_ = true;
   bool limit_width_ = true;
   bool accept_drops_ = true;
@@ -116,6 +163,8 @@ class MainWindow : public QMainWindow {
   QAction* cut_ = nullptr;
   QAction* copy_ = nullptr;
   QAction* paste_ = nullptr;
+  QAction* paste_html_ = nullptr;
+  bool clipboard_html_ = false;
   QAction* read_only_ = nullptr;
   QAction* revert_ = nullptr;
   QMenu* recent_menu_ = nullptr;
@@ -141,4 +190,22 @@ class MainWindow : public QMainWindow {
   QLabel* position_label_ = nullptr;
   QLabel* words_label_ = nullptr;
   QTimer* words_timer_ = nullptr;
+  QLabel* notice_label_ = nullptr;
+  QTimer* notice_timer_ = nullptr;
+  QFileSystemWatcher* file_watcher_ = nullptr;
+  QTimer* watch_timer_ = nullptr;
+  bool disk_dialog_open_ = false;
+  QString mcp_server_name_;
+  bool mcp_enabled_ = false;
+  QString mcp_socket_dir_;
+  bool mcp_use_socket_dir_ = false;
+  QAction* mcp_default_dir_action_ = nullptr;
+  QAction* mcp_picked_dir_action_ = nullptr;
+  std::unique_ptr<McpServer> mcp_server_;
+  PreviewSplitter* splitter_ = nullptr;
+  PreviewView* preview_ = nullptr;
+  QWidget* preview_box_ = nullptr;  
+  QAction* show_preview_ = nullptr;
+  QTimer* preview_timer_ = nullptr;
+  bool preview_stale_ = true;
 };

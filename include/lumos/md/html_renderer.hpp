@@ -24,6 +24,8 @@ struct HtmlOptions {
   bool unsafe = false;
   bool tagfilter = false;
   bool hard_breaks = false;
+  std::size_t output_cap = std::size_t{16} << 20;
+  bool source_anchors = false;
   std::function<std::optional<std::string>(UrlKind kind, std::string_view url)> url_hook;
   std::function<NodeOutput(const SyntaxTree& tree, const TextSource& text, NodeId id, bool entering,
                            std::string& out)>
@@ -35,7 +37,8 @@ bool is_dangerous_url(std::string_view url) noexcept;
 void append_escaped_href(std::string_view url, std::string& out);
 void append_escaped_html(std::string_view text, std::string& out);
 
-void render_html(const SyntaxTree& tree, const TextSource& text, const HtmlOptions& options, std::string& out);
+[[nodiscard]] bool render_html(const SyntaxTree& tree, const TextSource& text, const HtmlOptions& options,
+                               std::string& out);
 
 std::string render_html(const SyntaxTree& tree, const TextSource& text, const HtmlOptions& options = {});
 

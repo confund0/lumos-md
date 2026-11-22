@@ -190,6 +190,17 @@ TEST_CASE("document modified flag follows undo and redo") {
   other.commit();
   CHECK_FALSE(other.can_undo());
   CHECK_FALSE(other.modified());
+
+  other.mark_unsaved();
+  CHECK(other.modified());
+  other.apply(Edit{1, 0, "b"});
+  other.undo();
+  CHECK(other.modified());
+  other.mark_saved();
+  CHECK_FALSE(other.modified());
+  other.begin();
+  CHECK_THROWS_AS(other.mark_unsaved(), std::logic_error);
+  other.commit();
 }
 
 TEST_CASE("document listener may remove itself") {

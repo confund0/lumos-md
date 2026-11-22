@@ -1,4 +1,4 @@
-.TH LUMOS\-MD 1 2026-11-16 "lumos\-md 0.2.0" "User Commands"
+.TH LUMOS\-MD 1 2026-11-22 "lumos\-md 0.3.0" "User Commands"
 .SH NAME
 lumos\-md \- Markdown editor
 .SH SYNOPSIS
@@ -19,10 +19,55 @@ start exits.
 .PP
 A few seconds after an edit, the unsaved text goes to a draft file.
 After a crash, the next start offers to recover it.
+.PP
+When an open file changes on disk, lumos\-md loads it again as one
+undo step and says so in the status bar; Undo gives the old text back.
+A tab with unsaved changes asks first: Show diff (both texts side by
+side, to merge them), Save as shown, Load changes or Cancel. A deleted
+or moved file asks: Keep in editor or Close. Save asks before it
+writes over a file that changed on disk.
+.PP
+A file without write access opens for edits as usual. The window title
+shows [Read\-Only], and Save opens Save As.
+.PP
+View, Show Preview shows the current tab as HTML, right of the editor.
+It follows the text and the scroll position of the editor. The buttons
+on the bar between them give the preview or the editor the full width.
+A click on a link opens it. Raw HTML in a note does not show, and
+pictures load only from local files.
+.PP
+View, Theme picks the colours: Default (the colours of the desktop),
+Light grey or Gruvbox (dark).
+.PP
+Edit, Paste from HTML (Ctrl+Alt+V) pastes a copy from a web page as
+Markdown: headings, lists, quotes, code blocks, tables, links, and bold,
+italic or code text. One undo removes the whole paste. In a code block
+or a table, it pastes the plain text.
+.PP
+AI agents (MCP): with Tools, Enable MCP Server on, an agent can list the
+open files and read their text, with unsaved changes. It reads a file
+before it changes it, then writes the file with its own tools; the
+change shows as a change on disk. In the agent's settings, add the
+command
+.B lumos\-md \-\-mcp
+as a stdio MCP server.
+Any program of the same user can then read the open files, also text
+that is not saved. The switch is off by default.
 .SH OPTIONS
 .TP
 .BR \-h ", " \-\-help
 Print the options and exit.
+.TP
+.B \-\-mcp
+Run as the MCP server for an AI agent, over standard input and output.
+The agent starts it; it opens no window and reads from the running
+lumos\-md.
+.TP
+.BI \-\-mcp\-dir " dir"
+With
+.BR \-\-mcp :
+the socket folder chosen in Tools, MCP Socket Folder, for an agent in
+a sandbox that cannot see the default socket.
 .SH FILES
 .TP
 .I \(ti/.config/lumos\-md/lumos\-md.ini
@@ -46,7 +91,9 @@ The drafts of unsaved text.
 If
 .I \(ti/.lumos\-md/lumos\-md.ini
 exists, the settings, the log, the open tabs and the drafts are in this
-directory instead.
+directory instead. To change the directory, close lumos\-md first, then
+move the files by hand: lumos\-md writes the settings when its window
+closes.
 .SH ENVIRONMENT
 .TP
 .B XDG_CONFIG_HOME
