@@ -13,8 +13,11 @@ case $debver in
 esac
 
 # dpkg-buildpackage counts all online CPUs, also in a container pinned
-# to fewer; nproc counts the pinned ones.
-DEB_BUILD_OPTIONS=${DEB_BUILD_OPTIONS:-parallel=$(nproc)}
+# to fewer; nproc counts the pinned ones. At most 4 jobs: the shared
+# Debian container has no CPU pin.
+jobs=$(nproc)
+[ "$jobs" -gt 4 ] && jobs=4
+DEB_BUILD_OPTIONS=${DEB_BUILD_OPTIONS:-parallel=$jobs}
 export DEB_BUILD_OPTIONS
 
 mkdir -p "$out"

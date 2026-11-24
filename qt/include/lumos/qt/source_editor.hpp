@@ -61,6 +61,7 @@ class SourceEditor : public QAbstractScrollArea {
   std::string selected_text() const;
   void set_cursor_position(std::size_t pos, bool keep_anchor = false);
   void select(std::size_t anchor, std::size_t cursor);
+  void go_to_line(std::size_t line);
 
   void insert_text(std::string_view utf8);
 
@@ -75,6 +76,7 @@ class SourceEditor : public QAbstractScrollArea {
 
   const StyleTable& style_table() const { return styles_; }
   void set_style_table(StyleTable table);
+  void use_default_style_table();
 
   int max_text_width() const { return max_text_width_; }
   void set_max_text_width(int chars);
@@ -176,7 +178,6 @@ class SourceEditor : public QAbstractScrollArea {
   void update_scrollbar() const;
   void check_modified();
   void check_undo_state();
-  void use_default_styles();
 
   std::size_t line_index(std::size_t pos) const;
   std::size_t line_at_y(int y) const;

@@ -1,6 +1,7 @@
 #include "lumos/commands.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <new>
@@ -12,6 +13,7 @@
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h>
 
+#include "find_detail.hpp"
 #include "lumos/log.hpp"
 #include "md/unicode.hpp"
 
@@ -112,8 +114,15 @@ void log_replace(std::string_view event, std::size_t edits) {
   if (log_enabled(LogLevel::debug)) log(LogLevel::debug, "commands", event, {{"edits", std::to_string(edits)}});
 }
 
+void log_budget_hit(std::uint64_t calls) {
+  if (log_enabled(LogLevel::debug))
+    log(LogLevel::debug, "commands", "find_budget_hit", {{"calls", std::to_string(calls)}});
+}
+
 constexpr std::uint32_t match_limit = 10'000'000;
 constexpr std::uint32_t heap_limit_kib = 64 * 1024;
+
+constexpr std::chrono::milliseconds scan_budget{500};
 
 struct CodeFree {
   void operator()(pcre2_code* p) const { pcre2_code_free(p); }
@@ -220,13 +229,21 @@ std::size_t step_at(std::string_view text, std::size_t pos) {
 }
 
 template <typename Fn>
-bool for_each_regex_hit(std::string_view text, Regex& re, bool whole_word, Fn&& fn) {
+bool for_each_regex_hit(std::string_view text, Regex& re, bool whole_word,
+                        std::chrono::steady_clock::duration budget, Fn&& fn) {
+  const auto deadline = std::chrono::steady_clock::now() + budget;
+  std::uint64_t calls = 0;
   for (const ByteRange piece : subjects(text)) {
     const std::string_view sub = piece_text(text, piece);
     std::size_t pos = 0;
     std::uint32_t options = 0;
     while (pos <= sub.size()) {
+      if (std::chrono::steady_clock::now() >= deadline) {
+        log_budget_hit(calls);
+        return false;
+      }
       const Regex::Result r = re.match(sub, pos, options);
+      ++calls;
       if (r == Regex::Result::error) return false;
       if (r == Regex::Result::none) {
         if ((options & PCRE2_ANCHORED) == 0 || pos == sub.size()) break;
@@ -244,11 +261,13 @@ bool for_each_regex_hit(std::string_view text, Regex& re, bool whole_word, Fn&& 
   return true;
 }
 
-FindResult find_regex(std::string_view text, std::string_view pattern, bool case_sensitive, bool whole_word) {
+FindResult find_regex(std::string_view text, std::string_view pattern, bool case_sensitive, bool whole_word,
+                      std::chrono::steady_clock::duration budget) {
   auto re = Regex::compile(pattern, case_sensitive);
   if (!re) return {FindStatus::invalid_pattern, {}};
   std::vector<ByteRange> hits;
-  if (!for_each_regex_hit(text, *re, whole_word, [&](ByteRange hit, std::string_view) { hits.push_back(hit); }))
+  if (!for_each_regex_hit(text, *re, whole_word, budget,
+                          [&](ByteRange hit, std::string_view) { hits.push_back(hit); }))
     return {FindStatus::limit_hit, {}};
   return {FindStatus::ok, std::move(hits)};
 }
@@ -326,11 +345,20 @@ std::optional<std::string> expand_at(std::string_view text, ByteRange match, std
 
 }  
 
-FindResult find_all(const Document& doc, std::string_view pattern, FindOptions options) {
+namespace find_detail {
+
+FindResult find_all_within(const Document& doc, std::string_view pattern, FindOptions options,
+                           std::chrono::steady_clock::duration budget) {
   if (pattern.empty()) return {};
   const std::string text = doc.text();
-  if (options.regex) return find_regex(text, pattern, options.case_sensitive, options.whole_word);
+  if (options.regex) return find_regex(text, pattern, options.case_sensitive, options.whole_word, budget);
   return {FindStatus::ok, find_literal(text, pattern, options.case_sensitive, options.whole_word)};
+}
+
+}  
+
+FindResult find_all(const Document& doc, std::string_view pattern, FindOptions options) {
+  return find_detail::find_all_within(doc, pattern, options, scan_budget);
 }
 
 std::optional<CommandResult> replace_one(const Document& doc, ByteRange match, std::string_view pattern,
@@ -347,8 +375,10 @@ std::optional<CommandResult> replace_one(const Document& doc, ByteRange match, s
   return r;
 }
 
-ReplaceAllResult replace_all(const Document& doc, std::string_view pattern, std::string_view replacement,
-                             FindOptions options) {
+namespace find_detail {
+
+ReplaceAllResult replace_all_within(const Document& doc, std::string_view pattern, std::string_view replacement,
+                                    FindOptions options, std::chrono::steady_clock::duration budget) {
   if (pattern.empty()) return {};
   const std::string text = doc.text();
   std::vector<std::pair<ByteRange, std::string>> matches;
@@ -356,7 +386,7 @@ ReplaceAllResult replace_all(const Document& doc, std::string_view pattern, std:
     auto re = Regex::compile(pattern, options.case_sensitive);
     if (!re) return {FindStatus::invalid_pattern, std::nullopt};
     const std::vector<ReplacementPart> parts = parse_replacement(replacement);
-    const bool ok = for_each_regex_hit(text, *re, options.whole_word, [&](ByteRange hit, std::string_view sub) {
+    const bool ok = for_each_regex_hit(text, *re, options.whole_word, budget, [&](ByteRange hit, std::string_view sub) {
       matches.emplace_back(hit, expand(sub, *re, parts));
     });
     if (!ok) return {FindStatus::limit_hit, std::nullopt};
@@ -385,6 +415,13 @@ ReplaceAllResult replace_all(const Document& doc, std::string_view pattern, std:
   r.selection = Selection{selection_pos, selection_pos};
   log_replace("replace_all", r.edits.size());
   return {FindStatus::ok, std::move(r)};
+}
+
+}  
+
+ReplaceAllResult replace_all(const Document& doc, std::string_view pattern, std::string_view replacement,
+                             FindOptions options) {
+  return find_detail::replace_all_within(doc, pattern, replacement, options, scan_budget);
 }
 
 }  

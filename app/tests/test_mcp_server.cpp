@@ -15,13 +15,22 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#include <QDialog>
+#include <QElapsedTimer>
+
+#include <atomic>
 #include <chrono>
+#include <cmath>
 #include <future>
 #include <optional>
+#include <string>
 #include <thread>
+#include <vector>
 
 #include "dialog_util.hpp"
 #include "document_tab.hpp"
+#include "drafts.hpp"
+#include "file_modes.hpp"
 #include "mcp_server.hpp"
 #include "main_window.hpp"
 #include "mcp_bridge.hpp"
@@ -92,6 +101,10 @@ std::optional<QByteArray> raw_request(const QString& name, const QByteArray& pay
   return result;
 }
 
+QJsonObject show(const QString& name, const QString& path) {
+  return ask(name, QJsonObject{{"v", 1}, {"op", "show"}, {"path", path}}).value_or(QJsonObject{{"no_answer", true}});
+}
+
 QAction* mcp_action(MainWindow& window) { return window.findChild<QAction*>(QStringLiteral("mcp_enabled")); }
 
 QTabWidget* tab_widget(MainWindow& window) { return window.tabs_for_tests(); }
@@ -136,6 +149,15 @@ class TestMcpServer : public QObject {
   void socket_folder_never_removes_a_file();
   void listen_replaces_a_stale_socket();
   void end_to_end_with_mcp_dir();
+  void show_opens_or_picks_the_tab();
+  void show_errors();
+  void show_unreadable_file();
+  void show_answers_before_draft_offer();
+  void show_with_line_moves_the_cursor();
+  void show_with_line_past_the_end_gives_the_last_line();
+  void show_with_a_bad_line_gives_bad_request();
+  void show_with_line_on_a_new_tab_waits_for_its_size();
+  void show_without_line_leaves_the_cursor();
 };
 
 void TestMcpServer::switch_off_by_default() {
@@ -501,6 +523,260 @@ void TestMcpServer::end_to_end_with_mcp_dir() {
   process.closeWriteChannel();
   QVERIFY(process.waitForFinished(5000));
   QCOMPARE(process.exitCode(), 0);
+}
+
+void TestMcpServer::show_opens_or_picks_the_tab() {
+  QTemporaryDir settings_dir;
+  QTemporaryDir work_dir;
+  QTemporaryDir socket_dir;
+  QDir dir(work_dir.path());
+  QVERIFY(dir.mkdir(QStringLiteral("sub")));
+  const QString a = write_file(dir, QStringLiteral("a.md"), QStringLiteral("# A\n"));
+  const QString b = write_file(dir, QStringLiteral("b.md"), QStringLiteral("# B\n"));
+  const QString c = write_file(dir, QStringLiteral("c.md"), QStringLiteral("# C\n"));
+
+  MainWindow window(QDir(settings_dir.path()).filePath(QStringLiteral("settings.ini")));
+  const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
+  window.set_mcp_server_name(name);
+  mcp_action(window)->setChecked(true);
+  QCOMPARE(tab_widget(window)->count(), 1);
+
+  const QJsonObject shown{{"shown", true}};
+  QCOMPARE(show(name, a), shown);
+  QCOMPARE(tab_widget(window)->count(), 1);
+  QCOMPARE(window.current_tab()->path(), a);
+
+  QCOMPARE(show(name, b), shown);
+  QCOMPARE(tab_widget(window)->count(), 2);
+  QCOMPARE(window.current_tab()->path(), b);
+
+  QCOMPARE(show(name, dir.filePath(QStringLiteral("sub/../a.md"))),
+           shown);
+  QCOMPARE(tab_widget(window)->count(), 2);
+  QCOMPARE(window.current_tab()->path(), a);
+
+  QCOMPARE(show(name, dir.filePath(QStringLiteral("sub/../c.md"))),
+           shown);
+  QCOMPARE(tab_widget(window)->count(), 3);
+  QCOMPARE(window.current_tab()->path(), c);
+}
+
+void TestMcpServer::show_errors() {
+  QTemporaryDir settings_dir;
+  QTemporaryDir work_dir;
+  QTemporaryDir socket_dir;
+  QDir dir(work_dir.path());
+  QVERIFY(dir.mkdir(QStringLiteral("sub")));
+  const QString a = write_file(dir, QStringLiteral("a.md"), QStringLiteral("# A\n"));
+
+  MainWindow window(QDir(settings_dir.path()).filePath(QStringLiteral("settings.ini")));
+  const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
+  window.set_mcp_server_name(name);
+  mcp_action(window)->setChecked(true);
+
+  const QJsonObject not_file{{"shown", false}, {"reason", "not_file"}};
+  QCOMPARE(show(name, dir.filePath(QStringLiteral("missing.md"))),
+           not_file);
+  QCOMPARE(show(name, dir.filePath(QStringLiteral("sub"))), not_file);
+
+  const QByteArray bad_lines[] = {"{\"v\":1,\"op\":\"show\",\"path\":\"a.md\"}\n", "{\"v\":1,\"op\":\"show\"}\n"};
+  for (const QByteArray& line : bad_lines) {
+    const auto reply = raw_request(name, line);
+    QVERIFY(reply.has_value());
+    QCOMPARE(*reply, QByteArray("{\"error\":\"bad_request\"}\n"));
+  }
+
+  QDialog dialog(&window);
+  dialog.setModal(true);
+  dialog.show();
+  QVERIFY(QTest::qWaitFor([&] { return QApplication::activeModalWidget() == &dialog; }, 2000));
+  QCOMPARE(show(name, a),
+           (QJsonObject{{"shown", false}, {"reason", "busy"}}));
+  dialog.close();
+
+  QCOMPARE(tab_widget(window)->count(), 1);
+  QVERIFY(window.current_tab()->path().isEmpty());
+}
+
+void TestMcpServer::show_unreadable_file() {
+  if (!file_modes_apply()) QSKIP("file modes do not apply (root)");
+  QTemporaryDir settings_dir;
+  QTemporaryDir work_dir;
+  QTemporaryDir socket_dir;
+  const QString a = write_file(QDir(work_dir.path()), QStringLiteral("a.md"), QStringLiteral("# A\n"));
+  QVERIFY(QFile::setPermissions(a, QFileDevice::Permissions()));
+
+  MainWindow window(QDir(settings_dir.path()).filePath(QStringLiteral("settings.ini")));
+  const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
+  window.set_mcp_server_name(name);
+  mcp_action(window)->setChecked(true);
+
+  const auto answer = ask(name, QJsonObject{{"v", 1}, {"op", "show"}, {"path", a}});
+  QVERIFY(answer.has_value());
+  QCOMPARE(answer->value("shown").toBool(), false);
+  QCOMPARE(answer->value("reason").toString(), QStringLiteral("cannot_open"));
+  QVERIFY(!answer->value("detail").toString().isEmpty());
+  QCOMPARE(tab_widget(window)->count(), 1);
+  QVERIFY(window.current_tab()->is_blank());
+}
+
+void TestMcpServer::show_answers_before_draft_offer() {
+  QTemporaryDir dir;
+  QVERIFY(dir.isValid());
+  const QDir d(dir.path());
+  const QString drafts_dir = d.filePath(QStringLiteral("drafts"));
+  const QString path = write_file(d, QStringLiteral("a.md"), QStringLiteral("# A\n"));
+  const Draft draft{.untitled = false, .path = path, .saved_sha256 = sha256_hex(QByteArray("# A\n")),
+                    .text = QByteArray("# A\ndraft text")};
+  QVERIFY(write_draft(drafts_dir, path_draft_id(path), draft));
+
+  MainWindow window(d.filePath(QStringLiteral("settings.ini")), QString(), drafts_dir);
+  const QString name = d.filePath(QStringLiteral("mcp"));
+  window.set_mcp_server_name(name);
+  mcp_action(window)->setChecked(true);
+
+  std::atomic<bool> answered{false};
+  bool answered_while_box_open = false;
+  QElapsedTimer box_clock;
+  QTimer timer;
+  timer.setInterval(10);
+  QObject::connect(&timer, &QTimer::timeout, [&] {
+    auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+    if (box == nullptr) return;
+    if (!box_clock.isValid()) box_clock.start();
+    if (!answered && box_clock.elapsed() < 3000) return;
+    answered_while_box_open = answered;
+    for (QAbstractButton* button : box->buttons()) {
+      if (button->text() == QStringLiteral("Recover")) button->click();
+    }
+    timer.stop();
+  });
+  timer.start();
+
+  std::optional<QJsonObject> answer;
+  std::thread thread([&] {
+    answer = ask_window(name, QJsonObject{{"v", 1}, {"op", "show"}, {"path", path}});
+    answered = true;
+  });
+  const bool done = QTest::qWaitFor([&] { return answered.load() && !timer.isActive(); }, 10000);
+  thread.join();
+  QVERIFY(done);
+  QVERIFY(answered_while_box_open);
+  QVERIFY(answer.has_value());
+  QCOMPARE(answer->value("shown").toBool(), true);
+  QCOMPARE(window.current_tab()->editor()->text(), std::string("# A\ndraft text"));
+}
+
+void TestMcpServer::show_with_line_moves_the_cursor() {
+  QTemporaryDir settings_dir;
+  QTemporaryDir work_dir;
+  QTemporaryDir socket_dir;
+  const QString a =
+      write_file(QDir(work_dir.path()), QStringLiteral("a.md"), QStringLiteral("l0\nl1\nl2\nl3\nl4\n"));
+
+  MainWindow window(QDir(settings_dir.path()).filePath(QStringLiteral("settings.ini")));
+  const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
+  window.set_mcp_server_name(name);
+  mcp_action(window)->setChecked(true);
+
+  const auto answer = ask(name, QJsonObject{{"v", 1}, {"op", "show"}, {"path", a}, {"line", 3}});
+  QVERIFY(answer.has_value());
+  QCOMPARE(*answer, (QJsonObject{{"shown", true}, {"line", 3}}));
+  QVERIFY(QTest::qWaitFor([&] { return window.current_tab()->editor()->cursor_position() == std::size_t(6); }, 2000));
+}
+
+void TestMcpServer::show_with_line_past_the_end_gives_the_last_line() {
+  QTemporaryDir settings_dir;
+  QTemporaryDir work_dir;
+  QTemporaryDir socket_dir;
+  const QString a = write_file(QDir(work_dir.path()), QStringLiteral("a.md"), QStringLiteral("l0\nl1\nl2\nl3\nl4"));
+
+  MainWindow window(QDir(settings_dir.path()).filePath(QStringLiteral("settings.ini")));
+  const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
+  window.set_mcp_server_name(name);
+  mcp_action(window)->setChecked(true);
+
+  const auto answer = ask(name, QJsonObject{{"v", 1}, {"op", "show"}, {"path", a}, {"line", 100}});
+  QVERIFY(answer.has_value());
+  QCOMPARE(*answer, (QJsonObject{{"shown", true}, {"line", 5}}));
+  QVERIFY(QTest::qWaitFor([&] { return window.current_tab()->editor()->cursor_position() == std::size_t(12); }, 2000));
+}
+
+void TestMcpServer::show_with_a_bad_line_gives_bad_request() {
+  QTemporaryDir settings_dir;
+  QTemporaryDir work_dir;
+  QTemporaryDir socket_dir;
+  const QString a = write_file(QDir(work_dir.path()), QStringLiteral("a.md"), QStringLiteral("# A\n"));
+
+  MainWindow window(QDir(settings_dir.path()).filePath(QStringLiteral("settings.ini")));
+  const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
+  window.set_mcp_server_name(name);
+  mcp_action(window)->setChecked(true);
+
+  const QJsonObject bad{{"error", "bad_request"}};
+  for (const QJsonValue& line : {QJsonValue(0), QJsonValue(-1), QJsonValue(1.5), QJsonValue("3")}) {
+    const auto answer = ask(name, QJsonObject{{"v", 1}, {"op", "show"}, {"path", a}, {"line", line}});
+    QVERIFY(answer.has_value());
+    QCOMPARE(*answer, bad);
+  }
+  QCOMPARE(tab_widget(window)->count(), 1);
+  QVERIFY(window.current_tab()->path().isEmpty());
+}
+
+void TestMcpServer::show_with_line_on_a_new_tab_waits_for_its_size() {
+  QTemporaryDir settings_dir;
+  QTemporaryDir work_dir;
+  QTemporaryDir socket_dir;
+  QStringList lines;
+  std::vector<std::size_t> starts;
+  std::size_t offset = 0;
+  for (int i = 0; i < 300; ++i) {
+    lines << QString("word ").repeated(40);
+    starts.push_back(offset);
+    offset += static_cast<std::size_t>(lines.last().toUtf8().size()) + 1;  
+  }
+  const QString a = write_file(QDir(work_dir.path()), QStringLiteral("a.md"), lines.join(QStringLiteral("\n")));
+
+  MainWindow window(QDir(settings_dir.path()).filePath(QStringLiteral("settings.ini")));
+  const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
+  window.set_mcp_server_name(name);
+  mcp_action(window)->setChecked(true);
+  window.resize(900, 400);
+  window.show();
+  QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+  const auto answer = ask(name, QJsonObject{{"v", 1}, {"op", "show"}, {"path", a}, {"line", 250}});
+  QVERIFY(answer.has_value());
+  QCOMPARE(*answer, (QJsonObject{{"shown", true}, {"line", 250}}));
+
+  lumos::qt::SourceEditor* editor = window.current_tab()->editor();
+  QVERIFY(QTest::qWaitFor([&] { return editor->cursor_position() == starts[249]; }, 2000));
+  QVERIFY(QTest::qWaitFor(
+      [&] {
+        const QRect r = editor->cursor_rect();
+        const int center = r.y() + r.height() / 2;
+        const int view_center = editor->viewport()->height() / 2;
+        return std::abs(center - view_center) <= editor->line_height(249);
+      },
+      2000));
+}
+
+void TestMcpServer::show_without_line_leaves_the_cursor() {
+  QTemporaryDir settings_dir;
+  QTemporaryDir work_dir;
+  QTemporaryDir socket_dir;
+  const QString a =
+      write_file(QDir(work_dir.path()), QStringLiteral("a.md"), QStringLiteral("l0\nl1\nl2\nl3\nl4\n"));
+
+  MainWindow window(QDir(settings_dir.path()).filePath(QStringLiteral("settings.ini")));
+  const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
+  window.set_mcp_server_name(name);
+  mcp_action(window)->setChecked(true);
+
+  QCOMPARE(show(name, a), (QJsonObject{{"shown", true}}));
+  window.current_tab()->editor()->set_cursor_position(9);
+  QCOMPARE(show(name, a), (QJsonObject{{"shown", true}}));
+  QCOMPARE(window.current_tab()->editor()->cursor_position(), std::size_t(9));
 }
 
 QTEST_MAIN(TestMcpServer)

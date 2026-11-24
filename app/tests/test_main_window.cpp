@@ -7,6 +7,7 @@
 #include <QMimeData>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QScopeGuard>
 #include <QSettings>
 #include <QTabBar>
@@ -17,6 +18,7 @@
 
 #include <cmath>
 #include <memory>
+#include <utility>
 
 #include "dialog_util.hpp"
 #include "file_modes.hpp"
@@ -118,10 +120,14 @@ class TestMainWindow : public QObject {
   void read_only_file_cleared_by_chmod();
   void read_only_dir_makes_file_read_only();
   void theme_menu_applies_and_saves();
+  void theme_menu_has_every_theme();
   void theme_default_gives_system_palette_back();
+  void paper_look_off_follows_theme();
+  void paper_look_needs_light_page();
   void theme_unknown_id_and_unknown_role();
   void theme_png();
   void tab_close_button_closes_its_tab();
+  void help_pages_open_read_only();
 
  private:
   QAction* find_action(const QString& text) const;
@@ -919,6 +925,21 @@ void TestMainWindow::theme_menu_applies_and_saves() {
   QCOMPARE(QApplication::palette().color(QPalette::Window), QColor(0x1d, 0x20, 0x21));
 }
 
+void TestMainWindow::theme_menu_has_every_theme() {
+  const QString settings_file = QDir(dir_->path()).filePath(QStringLiteral("settings.ini"));
+  for (const Theme& t : themes()) {
+    if (!t.values) continue;
+    QAction* action = find_action(QString::fromUtf8(t.name.data(), static_cast<qsizetype>(t.name.size())));
+    QVERIFY(action != nullptr);
+    action->trigger();
+    QVERIFY(action->isChecked());
+    QCOMPARE(QApplication::palette().color(QPalette::Window),
+             QColor::fromRgb(t.values->at(static_cast<std::size_t>(ThemeRole::bg_base))));
+    QCOMPARE(QSettings(settings_file, QSettings::IniFormat).value(QStringLiteral("view/theme")).toString(),
+             QString::fromLatin1(t.id.data(), static_cast<qsizetype>(t.id.size())));
+  }
+}
+
 void TestMainWindow::theme_default_gives_system_palette_back() {
   const QPalette start = QApplication::palette();
   find_action(QStringLiteral("Paper look"))->trigger();
@@ -931,6 +952,72 @@ void TestMainWindow::theme_default_gives_system_palette_back() {
     QCOMPARE(QApplication::palette().color(role), start.color(role));
   QCOMPARE(window_->current_tab()->editor()->style_table().outside_background, paper);
   QVERIFY(qApp->styleSheet().contains(start.color(QPalette::Base).name()));
+}
+
+namespace {
+
+bool has_default_styles(const lumos::qt::SourceEditor* editor) {
+  const lumos::qt::StyleTable want = lumos::qt::StyleTable::make_default(editor->font(), editor->palette());
+  const lumos::qt::StyleTable& got = editor->style_table();
+  return got.page_background == want.page_background && got.outside_background == want.outside_background &&
+         got.code_line_background == want.code_line_background && got.headings[0] == want.headings[0] &&
+         got[lumos::NodeKind::heading_marker] == want[lumos::NodeKind::heading_marker];
+}
+
+}  
+
+void TestMainWindow::paper_look_off_follows_theme() {
+  const lumos::qt::SourceEditor* editor = window_->current_tab()->editor();
+  QAction* paper = find_action(QStringLiteral("Paper look"));
+  paper->trigger();
+  QVERIFY(!has_default_styles(editor));
+  paper->trigger();
+  QVERIFY(has_default_styles(editor));
+  find_action(QStringLiteral("Dark"))->trigger();
+  QCOMPARE(editor->palette().color(QPalette::Base), QColor(0x2a, 0x2a, 0x2a));
+  QVERIFY(has_default_styles(editor));
+  find_action(QStringLiteral("Light grey"))->trigger();
+  QCOMPARE(editor->palette().color(QPalette::Base), QColor(0xd9, 0xd9, 0xd9));
+  QVERIFY(has_default_styles(editor));
+  const QTextCharFormat heading = editor->style_table().headings[0];
+  find_action(QStringLiteral("Zoom in"))->trigger();
+  QVERIFY(editor->style_table().headings[0] != heading);
+  QVERIFY(has_default_styles(editor));
+}
+
+void TestMainWindow::paper_look_needs_light_page() {
+  const QString settings_file = QDir(dir_->path()).filePath(QStringLiteral("settings.ini"));
+  const auto saved = [&settings_file] {
+    return QSettings(settings_file, QSettings::IniFormat).value(QStringLiteral("view/paper_look")).toBool();
+  };
+  const lumos::qt::SourceEditor* editor = window_->current_tab()->editor();
+  QAction* paper = find_action(QStringLiteral("Paper look"));
+  QVERIFY(paper->isEnabled());
+
+  paper->trigger();
+  find_action(QStringLiteral("Dark slate"))->trigger();
+  QVERIFY(!paper->isEnabled());
+  QVERIFY(!paper->isChecked());
+  QVERIFY(saved());
+  QVERIFY(has_default_styles(editor));
+  find_action(QStringLiteral("Light grey"))->trigger();
+  QVERIFY(paper->isEnabled());
+  QVERIFY(paper->isChecked());
+  QVERIFY(!has_default_styles(editor));
+
+  find_action(QStringLiteral("Dark"))->trigger();
+  window_.reset();
+  window_ = std::make_unique<MainWindow>(settings_file);
+  editor = window_->current_tab()->editor();
+  paper = find_action(QStringLiteral("Paper look"));
+  QVERIFY(!paper->isEnabled());
+  QVERIFY(!paper->isChecked());
+  QVERIFY(has_default_styles(editor));
+  find_action(QStringLiteral("Default"))->trigger();
+  QVERIFY(paper->isEnabled());
+  QVERIFY(paper->isChecked());
+  QVERIFY(!has_default_styles(editor));
+  QVERIFY(saved());
 }
 
 void TestMainWindow::theme_unknown_id_and_unknown_role() {
@@ -986,4 +1073,30 @@ void TestMainWindow::tab_close_button_closes_its_tab() {
 }
 
 QTEST_MAIN(TestMainWindow)
+void TestMainWindow::help_pages_open_read_only() {
+  const std::pair<const char*, const char*> pages[] = {
+      {"Features", "features.md"}, {"MCP Server", "mcp.md"}, {"About lumos-md", "about.md"}};
+  for (const auto& [action, file] : pages) {
+    QAction* help = find_action(QString::fromLatin1(action));
+    QVERIFY(help != nullptr);
+    help->trigger();
+    DocumentTab* tab = window_->current_tab();
+    QCOMPARE(QFileInfo(tab->path()).fileName(), QString::fromLatin1(file));
+    QVERIFY(editor_bytes(tab).startsWith("# "));
+    QVERIFY(!editor_bytes(tab).contains("@PROJECT_VERSION@"));
+    QVERIFY(tab->editor()->is_read_only());
+    QVERIFY(find_action(QStringLiteral("Read-only"))->isChecked());
+  }
+  QCOMPARE(window_->tab_count(), 3);
+  QVERIFY(editor_bytes(window_->current_tab()).contains(LUMOS_MD_VERSION));
+  QSettings settings(QDir(dir_->path()).filePath(QStringLiteral("settings.ini")), QSettings::IniFormat);
+  QVERIFY(settings.value(QStringLiteral("recent/files")).toStringList().isEmpty());
+
+  const QString about = window_->current_tab()->path();
+  QVERIFY(window_->close_tab(tab_widget()->currentIndex()));
+  QVERIFY(window_->open_file(about));
+  QCOMPARE(window_->current_tab()->path(), about);
+  QVERIFY(window_->current_tab()->editor()->is_read_only());
+}
+
 #include "test_main_window.moc"

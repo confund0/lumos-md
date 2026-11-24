@@ -36,6 +36,7 @@
 #include <QPointer>
 #include <QRegularExpression>
 #include <QScrollBar>
+#include <QSignalBlocker>
 #include <QStyle>
 #include <QTabBar>
 #include <QTabWidget>
@@ -79,6 +80,9 @@
 namespace {
 
 constexpr std::string_view kComp = "app";
+QString help_dir() {
+  return QDir::cleanPath(QCoreApplication::applicationDirPath() + QStringLiteral("/" LUMOS_MD_HELP_DIR));
+}
 
 const QString kGeometry = QStringLiteral("window/geometry");
 const QString kWindowState = QStringLiteral("window/state");
@@ -140,6 +144,10 @@ lumos::qt::StyleTable paper_styles(const QFont& font, const QPalette& palette) {
   t.gutter_background = mix(paper, text, 0.08);
   t.gutter_text = mix(text, paper, 0.5);
   return t;
+}
+
+bool paper_look_fits(const QPalette& palette) {
+  return palette.color(QPalette::Active, QPalette::Base).lightness() > 127;
 }
 
 class TableGridPicker : public QWidget {
@@ -460,10 +468,13 @@ MainWindow::MainWindow(const QString& settings_file, const QString& open_tabs_fi
     settings_.setValue(kLimitWidth, on);
     for_each_tab([on](DocumentTab* tab) { tab->editor()->set_max_text_width(on ? 100 : 0); });
   });
-  add_view_setting(tr("&Paper look"), paper_look_, [this](bool on) {
+  paper_look_action_ = add_view_setting(tr("&Paper look"), paper_look_shown(), [this](bool on) {
+    paper_look_ = on;
     settings_.setValue(kPaperLook, on);
-    set_paper_look(on);
+    apply_paper_look();
+    apply_preview_look();
   });
+  paper_look_action_->setEnabled(paper_look_fits(QApplication::palette()));
   QMenu* theme_menu = view->addMenu(tr("T&heme"));
   auto* theme_group = new QActionGroup(this);
   for (const Theme& t : themes()) {
@@ -477,13 +488,6 @@ MainWindow::MainWindow(const QString& settings_file, const QString& open_tabs_fi
       set_theme(id);
     });
   }
-  QAction* drops = view->addAction(tr("Accept &drops"));
-  drops->setCheckable(true);
-  drops->setChecked(accept_drops_);
-  connect(drops, &QAction::toggled, this, [this](bool on) {
-    accept_drops_ = on;
-    for_each_tab([on](DocumentTab* tab) { tab->editor()->setAcceptDrops(on); });
-  });
   view->addSeparator();
   view->addAction(tr("&Font..."), this, [this] { choose_font(); });
   zoom_in_ = view->addAction(tr("Zoom &in"), this, [this] { set_zoom(zoom_ + 0.1); });
@@ -647,7 +651,10 @@ MainWindow::MainWindow(const QString& settings_file, const QString& open_tabs_fi
   connect(window_menu_, &QMenu::aboutToShow, this, [this] { fill_window_menu(); });
 
   QMenu* help = menuBar()->addMenu(tr("&Help"));
-  help->addAction(tr("&About lumos-md"), this, [this] { about(); });
+  help->addAction(tr("&Features"), this, [this] { open_help(QStringLiteral("features.md")); });
+  help->addAction(tr("&MCP Server"), this, [this] { open_help(QStringLiteral("mcp.md")); });
+  help->addSeparator();
+  help->addAction(tr("&About lumos-md"), this, [this] { open_help(QStringLiteral("about.md")); });
 
   const std::pair<QAction*, ToolIcon> icons[] = {
       {bold_, ToolIcon::bold},          {italic_, ToolIcon::italic},
@@ -712,31 +719,56 @@ MainWindow::~MainWindow() = default;
 bool MainWindow::open_file(const QString& path) { return open_path(path, false); }
 
 bool MainWindow::open_path(const QString& path, bool quiet) {
+  bool loaded = false;
+  QString error;
+  DocumentTab* tab = load_path_tab(path, &loaded, &error);
+  if (tab == nullptr) {
+    if (!quiet) QMessageBox::warning(this, tr("Open"), tr("Cannot open %1:\n%2").arg(path, error));
+    else lumos::log(lumos::LogLevel::debug, kComp, "open_quiet_failed", {{"size", std::to_string(path.size())}});
+    return false;
+  }
+  if (loaded) offer_path_draft(tab);
+  return true;
+}
+
+std::optional<quint64> MainWindow::open_buffer(const QString& path, QString* error) {
+  bool loaded = false;
+  DocumentTab* tab = load_path_tab(path, &loaded, error);
+  if (tab == nullptr) return std::nullopt;
+  if (loaded) {
+    QTimer::singleShot(0, this, [this, guard = QPointer<DocumentTab>(tab)] {
+      if (guard != nullptr) offer_path_draft(guard);
+    });
+  }
+  return tab->buffer_id();
+}
+
+DocumentTab* MainWindow::load_path_tab(const QString& path, bool* loaded, QString* error, bool add_recent) {
+  *loaded = false;
   if (const std::optional<quint64> open = find_buffer(path)) {
-    tabs_->setCurrentWidget(tab_by_id(*open));
-    return true;
+    DocumentTab* tab = tab_by_id(*open);
+    tabs_->setCurrentWidget(tab);
+    return tab;
   }
   DocumentTab* current = current_tab();
   const bool reuse = current != nullptr && current->is_blank();
   DocumentTab* tab = reuse ? current : make_tab();
-  QString error;
-  if (!tab->load(path, false, &error)) {
-    if (!quiet) QMessageBox::warning(this, tr("Open"), tr("Cannot open %1:\n%2").arg(path, error));
-    else lumos::log(lumos::LogLevel::debug, kComp, "open_quiet_failed", {{"size", std::to_string(path.size())}});
+  if (!tab->load(path, false, error)) {
     if (!reuse) delete tab;
-    return false;
+    return nullptr;
   }
+  *loaded = true;
+  if (QFileInfo(path).canonicalPath() == QFileInfo(help_dir()).canonicalFilePath()) tab->editor()->set_read_only(true);
   if (!reuse) tabs_->insertTab(tabs_->currentIndex() + 1, tab, QString());
   update_tab_text(tab);
   settings_.sync();
-  set_recent_files(add_recent_file(settings_.value(kRecentFiles).toStringList(), path));
+  if (add_recent) set_recent_files(add_recent_file(settings_.value(kRecentFiles).toStringList(), path));
   const int index = tabs_->indexOf(tab);
   if (tabs_->currentIndex() == index) refresh_for_current_tab();
   else tabs_->setCurrentIndex(index);
-  offer_path_draft(tab);
   schedule_tabs_write();
   sync_watch();
-  return true;
+  return tab;
 }
 
 void MainWindow::open_untitled_draft(const QString& id) {
@@ -1036,9 +1068,8 @@ DocumentTab* MainWindow::make_tab() {
   SourceEditor* editor = tab->editor();
   editor->set_line_numbers(line_numbers_);
   editor->set_max_text_width(limit_width_ ? 100 : 0);
-  editor->setAcceptDrops(accept_drops_);
   editor->setFont(current_font());
-  if (paper_look_) editor->set_style_table(paper_styles(editor->font(), editor->palette()));
+  if (paper_look_shown()) editor->set_style_table(paper_styles(editor->font(), editor->palette()));
   editor->viewport()->installEventFilter(this);
   editor->setContextMenuPolicy(Qt::CustomContextMenu);
   connect(editor, &QWidget::customContextMenuRequested, this, [this, tab](const QPoint& at) { context_menu(tab, at); });
@@ -1216,20 +1247,27 @@ DocumentTab* MainWindow::tab_by_id(quint64 id) const {
   return nullptr;
 }
 
-void MainWindow::set_paper_look(bool on) {
-  paper_look_ = on;
+bool MainWindow::paper_look_shown() const { return paper_look_ && paper_look_fits(QApplication::palette()); }
+
+void MainWindow::apply_paper_look() {
+  const bool on = paper_look_shown();
   for_each_tab([on](DocumentTab* tab) {
-    tab->editor()->set_style_table(on ? paper_styles(tab->editor()->font(), tab->editor()->palette())
-                                      : lumos::qt::StyleTable::make_default(tab->editor()->font(), tab->editor()->palette()));
+    lumos::qt::SourceEditor* editor = tab->editor();
+    if (on) editor->set_style_table(paper_styles(editor->font(), editor->palette()));
+    else editor->use_default_style_table();
   });
-  apply_preview_look();
 }
 
 void MainWindow::set_theme(const QString& id) {
   const Theme& theme = find_theme(id);
   theme_ = QString::fromLatin1(theme.id.data(), static_cast<qsizetype>(theme.id.size()));
   apply_theme(theme);
-  if (paper_look_) set_paper_look(true);
+  {
+    const QSignalBlocker block(paper_look_action_);
+    paper_look_action_->setChecked(paper_look_shown());
+  }
+  paper_look_action_->setEnabled(paper_look_fits(QApplication::palette()));
+  if (paper_look_) apply_paper_look();
   apply_preview_look();
 }
 
@@ -1266,7 +1304,7 @@ void MainWindow::apply_preview_look() {
   const QPalette pal = palette();
   const QColor base = pal.color(QPalette::Active, QPalette::Base);
   const QColor text = pal.color(QPalette::Active, QPalette::Text);
-  const QColor page = mix(base, QColor(0xc8, 0xa0, 0x58), paper_look_ ? 0.1 : 0.05);
+  const QColor page = mix(base, QColor(0xc8, 0xa0, 0x58), paper_look_shown() ? 0.1 : 0.05);
   preview_->set_look(page, mix(page, text, 0.35), mix(page, text, 0.07));
   preview_box_->layout()->setContentsMargins(0, tabs_->tabBar()->sizeHint().height(), 0, 0);
   render_preview();
@@ -1304,7 +1342,7 @@ void MainWindow::on_preview_size_changed() {
 void MainWindow::apply_font() {
   const QFont f = current_font();
   for_each_tab([&f](DocumentTab* tab) { tab->editor()->setFont(f); });
-  if (paper_look_) set_paper_look(true);
+  if (paper_look_shown()) apply_paper_look();
   apply_preview_look();
   lumos::log(lumos::LogLevel::debug, kComp, "font",
              {{"size", QString::number(font_size_).toStdString()}, {"zoom", QString::number(zoom_).toStdString()}});
@@ -1597,10 +1635,15 @@ void MainWindow::changeEvent(QEvent* e) {
   if (e->type() == QEvent::ActivationChange && isActiveWindow()) watch_timer_->start();
 }
 
-void MainWindow::about() {
-  QMessageBox::about(this, tr("About lumos-md"),
-                     tr("<b>lumos-md %1</b><p>A Markdown editor.</p><p>License: GNU AGPL 3.0</p>")
-                         .arg(QStringLiteral(LUMOS_MD_VERSION)));
+void MainWindow::open_help(const QString& name) {
+  const QString path = help_dir() + QLatin1Char('/') + name;
+  bool loaded = false;
+  QString error;
+  DocumentTab* tab = load_path_tab(path, &loaded, &error, false);
+  if (tab == nullptr) {
+    lumos::log(lumos::LogLevel::debug, kComp, "help_failed", {{"size", std::to_string(path.size())}});
+    QMessageBox::warning(this, tr("Help"), tr("Cannot open the help file %1:\n%2").arg(path, error));
+  }
 }
 
 void MainWindow::table_move(std::optional<lumos::CommandResult> result) {

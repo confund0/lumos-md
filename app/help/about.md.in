@@ -1,0 +1,56 @@
+# About lumos-md
+
+lumos-md @PROJECT_VERSION@: a Markdown editor for plain notes.
+
+## Why lumos-md
+
+- **Your file stays your file.** lumos-md opens and saves the exact
+  bytes of a file: line endings, spaces, list markers and front matter
+  stay as they are. An edit changes only the text it touches. Nothing is
+  reformatted when you open or save. So lumos-md works next to Obsidian,
+  Git and other tools on the same notes, and a diff shows only your own
+  changes.
+- **Standard Markdown.** An own CommonMark and GFM parser. Its HTML
+  output is byte-equal to the reference implementations, cmark and
+  cmark-gfm: a note looks the same here as on GitHub and in other tools
+  built on them.
+- **No lost work.** A few seconds after an edit, the unsaved text goes
+  to a draft file; after a crash or a power cut, the next start offers
+  to recover it. When another program changes an open file, lumos-md
+  loads it as one undo step, or, with unsaved changes, shows both texts
+  side by side so you can merge them.
+- **Private logs.** The log has one line per event, with sizes and
+  counts only. It never contains the text of a note, a search pattern
+  or a link.
+- **One window, many tabs.** Files open in tabs of one window; a second
+  start opens its files there. The tabs come back at the next start.
+- **AI agents.** An AI agent can read your open files with their
+  unsaved changes and show you a file or a line, through the Model
+  Context Protocol (MCP). See Help, MCP Server.
+- **C++ and Qt 6.** A fast native program with no web engine. The
+  Markdown core is portable C++20 and has no toolkit code, so other
+  toolkits and systems can follow. Packages exist for Alpine Linux and
+  Debian, and a PKGBUILD for Arch Linux; Windows and macOS builds are
+  planned.
+
+## Standards
+
+- CommonMark 0.31.2
+- GitHub Flavored Markdown 0.29: tables, task lists, strikethrough,
+  extended autolinks, disallowed raw HTML
+- YAML (`---`) and TOML (`+++`) front matter at the start of a file
+- UTF-8 text; other bytes are kept as they are
+- Model Context Protocol 2025-11-25 (also 2024-11-05, 2025-03-26 and
+  2025-06-18)
+- XDG Base Directory paths for settings and state on Linux
+
+## License
+
+GNU Affero General Public License v3.0 (AGPL-3.0-only). You may use
+lumos-md for any work, also commercial work. A product that includes
+lumos, given to others or used by them over a network, must offer them
+its source code under the same license. A commercial license for
+closed-source products is available: open an issue titled "Commercial
+license" on GitHub.
+
+Source and bug reports: https://github.com/confund0/lumos-md

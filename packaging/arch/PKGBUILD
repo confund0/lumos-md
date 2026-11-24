@@ -1,6 +1,6 @@
 # Maintainer: confund0 <110197472+confund0@users.noreply.github.com>
 pkgname=lumos-md
-pkgver=0.3.0
+pkgver=0.4.0
 pkgrel=1
 pkgdesc="Markdown editor that keeps the source text as the only truth"
 arch=('x86_64')

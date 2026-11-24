@@ -1,3 +1,19 @@
+lumos-md (0.4.0-1) unstable; urgency=medium
+
+  * Added the Help menu: Features, MCP Server and About open as
+    read-only tabs.
+  * Added the themes Dark, Dark blue-grey and Dark slate.
+  * Added an MCP tool to show a file: an agent can open a file in a
+    tab and go to a line in it.
+  * Updated View, Paper look: it shows only with a light theme.
+  * Fixed a theme change or a zoom after Paper look off: the page
+    kept the old colours and font.
+  * Fixed Find with a slow regex: the search stops after half a
+    second and the find bar shows "Pattern too slow".
+  * Removed View, Accept drops.
+
+ -- confund0 <110197472+confund0@users.noreply.github.com>  Tue, 24 Nov 2026 12:00:00 +0000
+
 lumos-md (0.3.0-1) unstable; urgency=medium
 
   * Added the file watch: a file that changes on disk loads again as

@@ -7,6 +7,7 @@
 #include <QJsonDocument>
 #include <QLocalSocket>
 
+#include <cmath>
 #include <cstdio>
 #include <iostream>
 #include <string>
@@ -20,7 +21,7 @@ const char kInstructions[] =
     "lumos-md is the user's Markdown editor. Before you change a file, call read_open_file with its absolute path. "
     "If the file is open, it may have unsaved edits: make your change on the text that read_open_file gives, then "
     "write the whole file. lumos-md shows the change to the user, who accepts or picks parts of it. If the file is "
-    "not open, edit it on disk as usual.";
+    "not open, edit it on disk as usual. To show the user a file or a line in it, call show_file.";
 
 const char kNewestProtocolVersion[] = "2025-11-25";
 
@@ -68,7 +69,25 @@ QJsonObject tools_list_result() {
                                                                                      "Absolute path of the file."}}}}},
                                    {"required", QJsonArray{"path"}}}},
       {"annotations", QJsonObject{{"readOnlyHint", true}}}};
-  return QJsonObject{{"tools", QJsonArray{list_open_files, read_open_file}}};
+  const QJsonObject show_file{
+      {"name", "show_file"},
+      {"description", "Shows a file to the user in lumos-md: opens it in a tab (or picks its open tab), makes that "
+                       "tab the current one and raises the window. It does not change the file and does not take "
+                       "the keyboard focus. With line, it also moves the cursor there and scrolls it into view."},
+      {"inputSchema",
+       QJsonObject{{"type", "object"},
+                   {"properties",
+                    QJsonObject{{"path", QJsonObject{{"type", "string"}, {"description", "Absolute path of the file."}}},
+                                {"line", QJsonObject{{"type", "integer"},
+                                                      {"minimum", 1},
+                                                      {"description",
+                                                       "Line to show; 1 is the first line of the text that "
+                                                       "read_open_file gives. lumos-md moves the cursor to the "
+                                                       "start of the line and scrolls it to the middle of the "
+                                                       "view. A line after the end gives the last line."}}}}},
+                   {"required", QJsonArray{"path"}}}},
+      {"annotations", QJsonObject{{"readOnlyHint", false}, {"destructiveHint", false}, {"idempotentHint", true}}}};
+  return QJsonObject{{"tools", QJsonArray{list_open_files, read_open_file, show_file}}};
 }
 
 QJsonObject call_list_open_files(const AskWindow& ask) {
@@ -120,6 +139,57 @@ QJsonObject call_read_open_file(const AskWindow& ask, const QJsonObject& argumen
   return tool_result(text, is_error);
 }
 
+bool is_valid_line(const QJsonValue& v) {
+  if (!v.isDouble()) return false;
+  const double d = v.toDouble();
+  return d == std::floor(d) && d >= 1 && d <= 2147483647.0;
+}
+
+QJsonObject call_show_file(const AskWindow& ask, const QJsonObject& arguments) {
+  const QJsonValue path_v = arguments.value("path");
+  if (!path_v.isString() || !QDir::isAbsolutePath(path_v.toString())) {
+    lumos::log(lumos::LogLevel::debug, kComp, "bridge_call", {{"tool", "show"}, {"result", "bad_path"}});
+    return tool_result("Give an absolute path.", true);
+  }
+  const QJsonValue line_v = arguments.value("line");
+  const bool has_line = !line_v.isUndefined() && !line_v.isNull();
+  if (has_line && !is_valid_line(line_v)) {
+    lumos::log(lumos::LogLevel::debug, kComp, "bridge_call", {{"tool", "show"}, {"result", "bad_line"}});
+    return tool_result("Give line as a whole number from 1.", true);
+  }
+  const QString path = path_v.toString();
+  const QString name = QFileInfo(path).fileName();
+  QJsonObject request{{"v", 1}, {"op", "show"}, {"path", path}};
+  if (has_line) request.insert("line", static_cast<int>(line_v.toDouble()));
+  const std::optional<QJsonObject> answer = ask(request);
+  const QJsonValue shown_v = answer ? answer->value("shown") : QJsonValue();
+  const QString reason = answer ? answer->value("reason").toString() : QString();
+  const char* result = "no_answer";
+  QString text = "lumos-md is not running, or Tools, Enable MCP Server is off.";
+  if (shown_v.isBool() && shown_v.toBool()) {
+    result = "ok";
+    if (has_line) {
+      const int shown_line = answer->value("line").toInt();
+      const bool past_end = shown_line < line_v.toDouble();
+      text = name + " is the current tab in lumos-md, at line " + QString::number(shown_line) +
+             (past_end ? ", its last line." : ".");
+    } else {
+      text = name + " is the current tab in lumos-md.";
+    }
+  } else if (shown_v.isBool() && reason == "busy") {
+    result = "busy";
+    text = "lumos-md has a dialog open. Ask the user to close it, then call show_file again.";
+  } else if (shown_v.isBool() && reason == "not_file") {
+    result = "not_file";
+    text = path + " does not exist or is not a file.";
+  } else if (shown_v.isBool() && reason == "cannot_open") {
+    result = "cannot_open";
+    text = "lumos-md cannot open " + name + ": " + answer->value("detail").toString();
+  }
+  lumos::log(lumos::LogLevel::debug, kComp, "bridge_call", {{"tool", "show"}, {"result", result}});
+  return tool_result(text, std::string_view(result) != "ok");
+}
+
 QByteArray handle_tools_call(const QJsonValue& id, const QJsonObject& params, const AskWindow& ask) {
   const QJsonValue name_v = params.value("name");
   if (!name_v.isString()) return make_error(id, -32602, "Invalid params");
@@ -127,6 +197,7 @@ QByteArray handle_tools_call(const QJsonValue& id, const QJsonObject& params, co
   const QJsonObject arguments = params.value("arguments").toObject();
   if (name == "list_open_files") return make_result(id, call_list_open_files(ask));
   if (name == "read_open_file") return make_result(id, call_read_open_file(ask, arguments));
+  if (name == "show_file") return make_result(id, call_show_file(ask, arguments));
   return make_error(id, -32602, "Unknown tool: " + name);
 }
 

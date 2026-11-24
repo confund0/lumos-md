@@ -50,8 +50,8 @@ again as one undo step; a tab with unsaved changes asks first. Edit,
 Paste from HTML (Ctrl+Alt+V) pastes a copy from a web page as Markdown.
 View, Show Preview shows the current tab as HTML next to the editor;
 View, Theme picks the colours. AI agents can read the open files, with
-unsaved changes, through MCP (Tools, Enable MCP Server; off by
-default): add the command `lumos-md --mcp` as a stdio MCP server in the
+unsaved changes, and show a file or a line in it to the user, through MCP
+(Tools, Enable MCP Server; off by default): add the command `lumos-md --mcp` as a stdio MCP server in the
 agent's settings. An agent's change to an open file shows as a change
 on disk, so the user accepts it or picks parts of it. lumos-md logs to
 `~/.local/state/lumos-md/lumos-md.log`. For debug lines, add

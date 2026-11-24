@@ -1,5 +1,6 @@
 #include "mcp_server.hpp"
 
+#include <QApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -10,9 +11,12 @@
 #include <QStringDecoder>
 #include <QTimer>
 
+#include <cmath>
 #include <string>
 
+#include "document_tab.hpp"
 #include "lumos/log.hpp"
+#include "lumos/qt/source_editor.hpp"
 #include "main_window.hpp"
 
 namespace {
@@ -23,6 +27,12 @@ constexpr int kRequestTimeoutMs = 5000;
 QByteArray to_line(const QJsonObject& object) { return QJsonDocument(object).toJson(QJsonDocument::Compact); }
 
 QJsonObject bad_request() { return QJsonObject{{"error", "bad_request"}}; }
+
+bool is_valid_line(const QJsonValue& v) {
+  if (!v.isDouble()) return false;
+  const double d = v.toDouble();
+  return d == std::floor(d) && d >= 1 && d <= 2147483647.0;
+}
 
 QJsonObject list_answer(const MainWindow& window, qsizetype& file_count) {
   QJsonArray files;
@@ -54,9 +64,37 @@ QJsonObject read_answer(const MainWindow& window, const QString& path, std::stri
   return QJsonObject{{"open", true}, {"text", text}};
 }
 
+QJsonObject show_answer(MainWindow& window, const QString& path, std::string_view& result,
+                         std::optional<int> line) {
+  if (QApplication::activeModalWidget() != nullptr) {
+    result = "busy";
+    return QJsonObject{{"shown", false}, {"reason", "busy"}};
+  }
+  if (!window.find_buffer(path) && !QFileInfo(path).isFile()) {
+    result = "not_file";
+    return QJsonObject{{"shown", false}, {"reason", "not_file"}};
+  }
+  QString error;
+  if (!window.open_buffer(path, &error)) {
+    result = "cannot_open";
+    return QJsonObject{{"shown", false}, {"reason", "cannot_open"}, {"detail", error}};
+  }
+  if (window.isMinimized()) window.showNormal();
+  window.raise();
+  QApplication::alert(&window);
+  result = "ok";
+  if (!line) return QJsonObject{{"shown", true}};
+  lumos::qt::SourceEditor* editor = window.current_tab() ? window.current_tab()->editor() : nullptr;
+  if (!editor) return QJsonObject{{"shown", true}};
+  const int shown_line = std::min(*line, static_cast<int>(editor->line_count()));
+  const std::size_t index = static_cast<std::size_t>(*line - 1);
+  QTimer::singleShot(0, editor, [editor, index] { editor->go_to_line(index); });
+  return QJsonObject{{"shown", true}, {"line", shown_line}};
+}
+
 }  
 
-QByteArray answer_window_request(const QByteArray& line, const MainWindow& window) {
+QByteArray answer_window_request(const QByteArray& line, MainWindow& window) {
   QJsonParseError parse_error;
   const QJsonDocument doc = QJsonDocument::fromJson(line, &parse_error);
   const bool is_object = parse_error.error == QJsonParseError::NoError && doc.isObject();
@@ -88,11 +126,32 @@ QByteArray answer_window_request(const QByteArray& line, const MainWindow& windo
     }
     return to_line(answer);
   }
+  if (envelope_ok && op == QStringLiteral("show")) {
+    const QJsonValue path_v = request.value("path");
+    const QJsonValue line_v = request.value("line");
+    const bool has_line = !line_v.isUndefined() && !line_v.isNull();
+    if (!path_v.isString() || !QDir::isAbsolutePath(path_v.toString()) || (has_line && !is_valid_line(line_v))) {
+      lumos::log(lumos::LogLevel::debug, kComp, "server_request", {{"op", "show"}, {"result", "bad_request"}});
+      return to_line(bad_request());
+    }
+    std::string_view result = "bad_request";
+    const std::optional<int> req_line =
+        has_line ? std::make_optional(static_cast<int>(line_v.toDouble())) : std::nullopt;
+    const QJsonObject answer = show_answer(window, QDir::cleanPath(path_v.toString()), result, req_line);
+    const std::string line_str = has_line ? std::to_string(*req_line) : std::string();
+    if (has_line) {
+      lumos::log(lumos::LogLevel::debug, kComp, "server_request",
+                 {{"op", "show"}, {"result", result}, {"line", line_str}});
+    } else {
+      lumos::log(lumos::LogLevel::debug, kComp, "server_request", {{"op", "show"}, {"result", result}});
+    }
+    return to_line(answer);
+  }
   lumos::log(lumos::LogLevel::debug, kComp, "server_request", {{"op", "bad"}, {"result", "bad_request"}});
   return to_line(bad_request());
 }
 
-McpServer::McpServer(const MainWindow& window) : window_(window) {
+McpServer::McpServer(MainWindow& window) : window_(window) {
   QObject::connect(&server_, &QLocalServer::newConnection, &server_, [this] { handle_new_connection(); });
 }
 

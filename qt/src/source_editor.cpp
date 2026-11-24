@@ -525,7 +525,8 @@ void SourceEditor::set_style_table(StyleTable table) {
   viewport()->update();
 }
 
-void SourceEditor::use_default_styles() {
+void SourceEditor::use_default_style_table() {
+  custom_styles_ = false;
   styles_ = StyleTable::make_default(font(), palette());
   for (Line& l : lines_) l.layout.reset();
   restyle();
@@ -1017,6 +1018,17 @@ void SourceEditor::move_cursor(std::size_t pos, bool keep_anchor) {
 }
 
 void SourceEditor::set_cursor_position(std::size_t pos, bool keep_anchor) { move_cursor(pos, keep_anchor); }
+
+void SourceEditor::go_to_line(std::size_t line) {
+  if (lines_.empty()) return;
+  ensure_layout();
+  const std::size_t index = std::min(line, lines_.size() - 1);
+  move_cursor(lines_[index].span.start, false);
+  const Line& l = lines_[index];
+  const QTextLine first_row = l.layout->lineAt(0);
+  const int row_center = l.y + static_cast<int>(std::round(first_row.y() + first_row.height() / 2.0));
+  verticalScrollBar()->setValue(row_center - viewport()->height() / 2);
+}
 
 void SourceEditor::select(std::size_t anchor, std::size_t cursor) {
   move_cursor(anchor, false);
@@ -1732,7 +1744,7 @@ void SourceEditor::changeEvent(QEvent* e) {
       log(LogLevel::debug, kComp, e->type() == QEvent::FontChange ? "font_change" : "palette_change",
           {{"custom_styles", custom_styles_ ? "1" : "0"}});
     if (!custom_styles_) {
-      use_default_styles();
+      use_default_style_table();
     } else if (e->type() == QEvent::FontChange) {
       for (Line& l : lines_) l.layout.reset();
       layout_dirty_ = true;

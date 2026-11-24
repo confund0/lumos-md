@@ -9,11 +9,11 @@ class MainWindow;
 class QLocalSocket;
 class QTimer;
 
-QByteArray answer_window_request(const QByteArray& line, const MainWindow& window);
+QByteArray answer_window_request(const QByteArray& line, MainWindow& window);
 
 class McpServer {
  public:
-  explicit McpServer(const MainWindow& window);
+  explicit McpServer(MainWindow& window);
 
   bool listen(const QString& name);
   void close();
@@ -26,7 +26,7 @@ class McpServer {
   void fail(QLocalSocket* socket, QTimer* timer);
   void finish(QLocalSocket* socket, QTimer* timer, const QByteArray& line);
 
-  const MainWindow& window_;
+  MainWindow& window_;
   QLocalServer server_;
   QString name_;
   QHash<QLocalSocket*, QByteArray> buffers_;

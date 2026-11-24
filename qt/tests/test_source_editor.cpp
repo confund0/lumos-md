@@ -51,6 +51,16 @@ std::string read_file(const QString& path) {
 
 std::string sample_path() { return std::string(LUMOS_TEST_DATA_DIR) + "/sample.md"; }
 
+std::string numbered_lines(int n, std::vector<std::size_t>* starts) {
+  std::string text;
+  for (int i = 0; i < n; ++i) {
+    if (i > 0) text += "\n";
+    starts->push_back(text.size());
+    text += "line " + std::to_string(i);
+  }
+  return text;
+}
+
 QString qs(std::string_view s) { return QString::fromUtf8(s.data(), static_cast<qsizetype>(s.size())); }
 
 void type_key(QWidget* w, const QString& text) {
@@ -150,6 +160,10 @@ class TestSourceEditor : public QObject {
   void drop_ignored_read_only_or_disabled();
   void auto_scroll_on_drag_select();
   void logs_carry_no_text();
+  void go_to_line_centers_the_line();
+  void go_to_line_past_the_end_gives_the_last_line();
+  void go_to_line_zero_gives_the_start();
+  void go_to_line_on_a_short_text_does_not_scroll();
 };
 
 void TestSourceEditor::split_lines_handles_line_endings() {
@@ -1506,6 +1520,10 @@ void TestSourceEditor::theme_from_palette() {
   ed.set_style_table(own);
   ed.setPalette(QPalette());
   QCOMPARE(ed.style_table()[lumos::NodeKind::heading_marker].foreground().color(), QColor(Qt::red));
+  ed.use_default_style_table();
+  QCOMPARE(ed.style_table()[lumos::NodeKind::heading_marker].foreground().color(), light_marker);
+  ed.setPalette(dark);
+  QCOMPARE(ed.style_table()[lumos::NodeKind::heading_marker].foreground().color(), marker);
 }
 
 void TestSourceEditor::two_widgets_share_no_state() {
@@ -1901,6 +1919,51 @@ void TestSourceEditor::logs_carry_no_text() {
   lumos::set_log_level(lumos::LogLevel::info);
   QVERIFY(log_lines.size() > 10);  
   for (const auto& line : log_lines) QVERIFY2(line.find(marker) == std::string::npos, line.c_str());
+}
+
+void TestSourceEditor::go_to_line_centers_the_line() {
+  SourceEditor ed;
+  ed.resize(300, 200);
+  std::vector<std::size_t> starts;
+  ed.set_text(numbered_lines(200, &starts));
+
+  ed.go_to_line(150);
+  QCOMPARE(ed.cursor_position(), starts[150]);
+  const QRect r = ed.cursor_rect();
+  const int center = r.y() + r.height() / 2;
+  const int view_center = ed.viewport()->height() / 2;
+  QVERIFY(std::abs(center - view_center) <= ed.line_height(150));
+}
+
+void TestSourceEditor::go_to_line_past_the_end_gives_the_last_line() {
+  SourceEditor ed;
+  ed.resize(300, 200);
+  std::vector<std::size_t> starts;
+  ed.set_text(numbered_lines(200, &starts));
+
+  ed.go_to_line(1000);
+  QCOMPARE(ed.cursor_position(), starts.back());
+}
+
+void TestSourceEditor::go_to_line_zero_gives_the_start() {
+  SourceEditor ed;
+  ed.resize(300, 200);
+  std::vector<std::size_t> starts;
+  ed.set_text(numbered_lines(200, &starts));
+  ed.go_to_line(150);
+  QVERIFY(ed.verticalScrollBar()->value() > 0);
+
+  ed.go_to_line(0);
+  QCOMPARE(ed.cursor_position(), std::size_t(0));
+  QCOMPARE(ed.verticalScrollBar()->value(), 0);
+}
+
+void TestSourceEditor::go_to_line_on_a_short_text_does_not_scroll() {
+  SourceEditor ed;
+  ed.resize(300, 200);
+  ed.set_text("line 0\nline 1\nline 2");
+  ed.go_to_line(1);
+  QCOMPARE(ed.verticalScrollBar()->value(), 0);
 }
 
 QTEST_MAIN(TestSourceEditor)

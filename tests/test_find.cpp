@@ -9,11 +9,41 @@
 #include <string_view>
 #include <vector>
 
+#include "find_detail.hpp"
 #include "lumos/commands.hpp"
 #include "lumos/document.hpp"
 #include "lumos/syntax.hpp"
 
 using namespace lumos;
+
+TEST_CASE("find: a zero scan budget gives limit_hit through the seam", "[find]") {
+  const Document doc("abc abc abc");
+  FindOptions opt;
+  opt.regex = true;
+  const auto found = find_detail::find_all_within(doc, "abc", opt, std::chrono::steady_clock::duration::zero());
+  CHECK(found.status == FindStatus::limit_hit);
+  CHECK(found.hits.empty());
+  const auto replaced =
+      find_detail::replace_all_within(doc, "abc", "x", opt, std::chrono::steady_clock::duration::zero());
+  CHECK(replaced.status == FindStatus::limit_hit);
+  CHECK_FALSE(replaced.command.has_value());
+}
+
+TEST_CASE("find: a costly regex over many lines gives limit_hit under the scan budget", "[find]") {
+  std::string line(20, 'a');
+  line += "b\n";
+  std::string text;
+  for (int i = 0; i < 60; ++i) text += line;
+  const Document doc(text);
+  FindOptions opt;
+  opt.regex = true;
+  const auto start = std::chrono::steady_clock::now();
+  const auto r = find_all(doc, "^(a+)+$", opt);
+  const auto took = std::chrono::steady_clock::now() - start;
+  CHECK(r.status == FindStatus::limit_hit);
+  CHECK(r.hits.empty());
+  CHECK(took < std::chrono::seconds(3));
+}
 
 namespace {
 

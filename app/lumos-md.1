@@ -1,4 +1,4 @@
-.TH LUMOS\-MD 1 2026-11-22 "lumos\-md 0.3.0" "User Commands"
+.TH LUMOS\-MD 1 2026-11-24 "lumos\-md 0.4.0" "User Commands"
 .SH NAME
 lumos\-md \- Markdown editor
 .SH SYNOPSIS
@@ -37,7 +37,8 @@ A click on a link opens it. Raw HTML in a note does not show, and
 pictures load only from local files.
 .PP
 View, Theme picks the colours: Default (the colours of the desktop),
-Light grey or Gruvbox (dark).
+Light grey, Gruvbox, Dark, Dark blue-grey or Dark slate (the last four
+are dark). View, Paper look works only with a light theme.
 .PP
 Edit, Paste from HTML (Ctrl+Alt+V) pastes a copy from a web page as
 Markdown: headings, lists, quotes, code blocks, tables, links, and bold,
@@ -47,12 +48,19 @@ or a table, it pastes the plain text.
 AI agents (MCP): with Tools, Enable MCP Server on, an agent can list the
 open files and read their text, with unsaved changes. It reads a file
 before it changes it, then writes the file with its own tools; the
-change shows as a change on disk. In the agent's settings, add the
+change shows as a change on disk. An agent can also show a file: it
+opens in a tab, that tab becomes the current one and the window is
+raised (on Wayland the desktop may only mark it as urgent). With a line
+number, the cursor goes to the start of that line and the line scrolls
+to the middle of the view. The keyboard focus does not move. In the agent's settings, add the
 command
 .B lumos\-md \-\-mcp
 as a stdio MCP server.
 Any program of the same user can then read the open files, also text
-that is not saved. The switch is off by default.
+that is not saved, and open files in tabs. The switch is off by default.
+.PP
+Help, Features lists what lumos\-md does and does not do; Help, MCP Server
+shows how to set up an agent. The pages open as read\-only tabs.
 .SH OPTIONS
 .TP
 .BR \-h ", " \-\-help
@@ -60,7 +68,7 @@ Print the options and exit.
 .TP
 .B \-\-mcp
 Run as the MCP server for an AI agent, over standard input and output.
-The agent starts it; it opens no window and reads from the running
+The agent starts it; it opens no window and talks to the running
 lumos\-md.
 .TP
 .BI \-\-mcp\-dir " dir"
@@ -94,6 +102,9 @@ exists, the settings, the log, the open tabs and the drafts are in this
 directory instead. To change the directory, close lumos\-md first, then
 move the files by hand: lumos\-md writes the settings when its window
 closes.
+.TP
+.I /usr/share/lumos\-md/help/
+The pages of the Help menu.
 .SH ENVIRONMENT
 .TP
 .B XDG_CONFIG_HOME

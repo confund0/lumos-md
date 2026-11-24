@@ -180,7 +180,9 @@ boundaries. All positions are UTF-8 byte offsets, as in the core.
   else LF); `newline()` gives it, for `insert_table`.
 - Selection: `cursor_position`, `anchor_position`, `has_selection`,
   `selection`, `selected_text`, `set_cursor_position(pos,
-  keep_anchor)`, `select(anchor, cursor)`.
+  keep_anchor)`, `select(anchor, cursor)`. `go_to_line(line)` (0-based)
+  puts the cursor at the start of the line and scrolls the line to the
+  middle of the view; a line after the end gives the last line.
 - Read-only: `set_read_only`, `is_read_only`. Keys, input method, cut,
   paste, undo and redo do not change the text; moving, selecting and
   copy still work, and so do the API calls.
@@ -209,7 +211,10 @@ boundaries. All positions are UTF-8 byte offsets, as in the core.
   the find hit formats, the page and outside brushes, `page_padding`,
   `page_margin` and the line number colours.
   `StyleTable::make_default(font, palette)` gives a theme that follows
-  the palette. Set the table again after a theme change.
+  the palette. A table from `set_style_table` stays over palette and
+  font changes: set it again after a theme change.
+  `use_default_style_table()` goes back to the default table, which
+  follows the palette and the font by itself.
 - Images: `set_image_max_height(px)` (0, the default, turns them off)
   shows each Markdown image below its source line, at most the text
   width and `px` high, never scaled up. The widget asks for each url

@@ -59,6 +59,7 @@ class MainWindow : public QMainWindow {
   QList<BufferInfo> list_buffers() const;
   std::optional<QByteArray> read_buffer(quint64 id) const;
   std::optional<quint64> find_buffer(const QString& path) const;
+  std::optional<quint64> open_buffer(const QString& path, QString* error);
 
   void set_mcp_server_name(const QString& name);
   bool mcp_listening() const;
@@ -69,6 +70,7 @@ class MainWindow : public QMainWindow {
 
  private:
   bool open_path(const QString& path, bool quiet);
+  DocumentTab* load_path_tab(const QString& path, bool* loaded, QString* error, bool add_recent = true);
   void open_untitled_draft(const QString& id);
   void offer_path_draft(DocumentTab* tab);
   void drain_other_start_queue();
@@ -87,7 +89,7 @@ class MainWindow : public QMainWindow {
   void handle_current();
   enum class ChangedAnswer { saved, merged, loaded, cancel };
   ChangedAnswer ask_changed(DocumentTab* tab, bool from_save);
-  void about();
+  void open_help(const QString& name);
   void update_actions();
   void update_position();
   void update_words();
@@ -106,7 +108,8 @@ class MainWindow : public QMainWindow {
   bool write_tab(DocumentTab* tab, const QString& path);
   bool maybe_save(DocumentTab* tab);
   void update_title();
-  void set_paper_look(bool on);
+  bool paper_look_shown() const;
+  void apply_paper_look();
   void set_theme(const QString& id);
   void choose_font();
   void set_zoom(double zoom);
@@ -146,11 +149,11 @@ class MainWindow : public QMainWindow {
   double font_size_ = 0;  
   double zoom_ = 1.0;
   int wheel_delta_ = 0;  
-  bool paper_look_ = false;
+  bool paper_look_ = false;  
+  QAction* paper_look_action_ = nullptr;
   QString theme_;  
   bool line_numbers_ = true;
   bool limit_width_ = true;
-  bool accept_drops_ = true;
   QTabWidget* tabs_ = nullptr;
   QMenu* window_menu_ = nullptr;
   QList<QAction*> window_tab_actions_;
