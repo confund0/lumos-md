@@ -18,12 +18,14 @@
 #include <QDir>
 #include <QDialogButtonBox>
 #include <QFontDatabase>
+#include <QFrame>
 #include <QFontDialog>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QImage>
 #include <QLineEdit>
 #include <QLabel>
+#include <QListWidget>
 #include <QLocale>
 #include <QMainWindow>
 #include <QMenu>
@@ -61,9 +63,11 @@
 #include "document_tab.hpp"
 #include "drafts.hpp"
 #include "file_watch.hpp"
+#include "file_types.hpp"
 #include "find_bar.hpp"
 #include "html_paste.hpp"
 #include "line_merge.hpp"
+#include "mcp_access.hpp"
 #include "mcp_bridge.hpp"
 #include "mcp_server.hpp"
 #include "merge_window.hpp"
@@ -100,6 +104,7 @@ const QString kRecentFiles = QStringLiteral("recent/files");
 const QString kMcpEnabled = QStringLiteral("mcp/enabled");
 const QString kMcpSocketDir = QStringLiteral("mcp/socket_dir");
 const QString kMcpUseSocketDir = QStringLiteral("mcp/use_socket_dir");
+const QString kMcpAllowedFolders = QStringLiteral("mcp/allowed_folders");
 const QLatin1String kDraftPrefix("draft:");
 
 constexpr double kMinZoom = 0.5;
@@ -121,7 +126,7 @@ std::string_view status_name(QSettings::Status s) {
 }
 
 QColor mix(const QColor& a, const QColor& b, double t) {
-  auto ch = [t](int x, int y) { return static_cast<int>(x + (y - x) * t + 0.5); };
+  auto ch = [t](int x, int y) { return static_cast<int>(std::lround(x + (y - x) * t)); };
   return QColor(ch(a.red(), b.red()), ch(a.green(), b.green()), ch(a.blue(), b.blue()));
 }
 
@@ -199,6 +204,58 @@ class TableGridPicker : public QWidget {
   int rows_ = 0;
   int cols_ = 0;
 };
+
+class ElidedLabel : public QLabel {
+ public:
+  using QLabel::QLabel;
+
+ protected:
+  QSize minimumSizeHint() const override { return {0, QLabel::minimumSizeHint().height()}; }
+  QSize sizeHint() const override { return {0, QLabel::sizeHint().height()}; }
+  void paintEvent(QPaintEvent*) override {
+    QPainter p(this);
+    const QRect r = contentsRect();
+    p.drawText(r, Qt::AlignLeft | Qt::AlignVCenter, fontMetrics().elidedText(text(), Qt::ElideMiddle, r.width()));
+  }
+};
+
+class StatusIcon : public QWidget {
+ public:
+  StatusIcon(ToolIcon kind, QWidget* parent, const QColor& fixed_color = QColor())
+      : QWidget(parent), icon_(fixed_color.isValid() ? toolbar_icon(kind, fixed_color) : toolbar_icon(kind)) {
+    setFixedSize(16, 16);
+  }
+
+ protected:
+  void paintEvent(QPaintEvent*) override {
+    QPainter p(this);
+    icon_.paint(&p, rect());
+  }
+
+ private:
+  QIcon icon_;
+};
+
+QFrame* status_section(ToolIcon kind, QLabel* label, const QString& tip, QWidget* parent,
+                        const QColor& warn_color = QColor()) {
+  auto* frame = new QFrame(parent);
+  frame->setFrameStyle(QFrame::Panel | QFrame::Sunken);
+  frame->setToolTip(tip);
+  if (warn_color.isValid()) {
+    frame->setAutoFillBackground(true);
+    QPalette pal = frame->palette();
+    pal.setColor(QPalette::Window, warn_color);
+    pal.setColor(QPalette::WindowText, Qt::black);
+    frame->setPalette(pal);
+    label->setPalette(pal);
+  }
+  auto* layout = new QHBoxLayout(frame);
+  layout->setContentsMargins(4, 1, 6, 1);
+  layout->setSpacing(4);
+  layout->addWidget(new StatusIcon(kind, frame, warn_color.isValid() ? QColor(Qt::black) : QColor()));
+  layout->addWidget(label, 1);
+  return frame;
+}
 
 class TabBar : public QTabBar {
  public:
@@ -294,6 +351,7 @@ MainWindow::MainWindow(const QString& settings_file, const QString& open_tabs_fi
   mcp_enabled_ = settings_.value(kMcpEnabled, mcp_enabled_).toBool();
   mcp_socket_dir_ = settings_.value(kMcpSocketDir).toString();
   mcp_use_socket_dir_ = settings_.value(kMcpUseSocketDir, false).toBool() && !mcp_socket_dir_.isEmpty();
+  mcp_allowed_folders_ = settings_.value(kMcpAllowedFolders).toStringList();
 
   auto* tab_widget = new TabWidget(this);
   tabs_ = tab_widget;
@@ -331,6 +389,9 @@ MainWindow::MainWindow(const QString& settings_file, const QString& open_tabs_fi
           [this](const QString&) { watch_timer_->start(); });
   connect(tab_widget->bar(), &QTabBar::tabMoved, this, [this](int, int) { schedule_tabs_write(); });
   connect(tab_widget->bar(), &QTabBar::tabCloseRequested, this, [this](int index) { close_tab(index); });
+  tab_widget->bar()->setContextMenuPolicy(Qt::CustomContextMenu);
+  connect(tab_widget->bar(), &QWidget::customContextMenuRequested, this,
+          [this, bar = tab_widget->bar()](const QPoint& at) { tab_context_menu(bar, at); });
   auto* corner = new TabCorner(tab_widget->bar(), tabs_);
   auto* corner_layout = new QHBoxLayout(corner);
   constexpr double kRightMm = 4.0;
@@ -593,6 +654,9 @@ MainWindow::MainWindow(const QString& settings_file, const QString& open_tabs_fi
     settings_.setValue(kMcpEnabled, on);
     update_mcp_server();
   });
+  connect(mcp_enabled_action, &QAction::triggered, this, [this](bool on) {
+    if (on && mcp_allowed_folders_.isEmpty()) QTimer::singleShot(0, this, [this] { choose_mcp_allowed_folders(); });
+  });
   QMenu* socket_menu = tools->addMenu(tr("MCP &Socket Folder"));
   auto* socket_group = new QActionGroup(socket_menu);
   mcp_default_dir_action_ = socket_menu->addAction(tr("&Default"));
@@ -609,6 +673,8 @@ MainWindow::MainWindow(const QString& settings_file, const QString& open_tabs_fi
   socket_menu->addAction(tr("&Choose Folder..."), this, [this] { choose_mcp_socket_dir(); })
       ->setObjectName(QStringLiteral("mcp_socket_choose"));
   refresh_mcp_socket_actions();
+  tools->addAction(tr("MCP &Allowed Folders..."), this, [this] { choose_mcp_allowed_folders(); })
+      ->setObjectName(QStringLiteral("mcp_allowed_folders"));
 
   QMenu* table = menuBar()->addMenu(tr("T&able"));
   table->addAction(table_action_);
@@ -689,17 +755,25 @@ MainWindow::MainWindow(const QString& settings_file, const QString& open_tabs_fi
   connect(notice_timer_, &QTimer::timeout, this, [this] { notice_label_->setVisible(false); });
 
   block_state_ = new QLabel(this);
-  statusBar()->addWidget(block_state_);
+  statusBar()->addWidget(status_section(ToolIcon::paragraph, block_state_, tr("Block at the cursor"), this));
+  path_label_ = new ElidedLabel(this);
+  path_label_->setObjectName(QStringLiteral("path"));
+  statusBar()->addWidget(status_section(ToolIcon::document, path_label_, QString(), this), 1);
+  mcp_status_label_ = new QLabel(tr("MCP"), this);
+  mcp_status_label_->setObjectName(QStringLiteral("mcp_status"));
+  mcp_status_frame_ = status_section(ToolIcon::mcp, mcp_status_label_, QString(), this, QColor(0xff, 0xd5, 0x4f));
+  statusBar()->addPermanentWidget(mcp_status_frame_);
+  mcp_status_frame_->setVisible(false);
   position_label_ = new QLabel(this);
-  statusBar()->addPermanentWidget(position_label_);
+  statusBar()->addPermanentWidget(status_section(ToolIcon::caret, position_label_, tr("Line and column"), this));
   words_label_ = new QLabel(this);
-  statusBar()->addPermanentWidget(words_label_);
+  statusBar()->addPermanentWidget(status_section(ToolIcon::words, words_label_, tr("Words"), this));
   words_timer_ = new QTimer(this);
   words_timer_->setSingleShot(true);
   words_timer_->setInterval(300);
   connect(words_timer_, &QTimer::timeout, this, [this] { update_words(); });
   zoom_label_ = new QLabel(this);
-  statusBar()->addPermanentWidget(zoom_label_);
+  statusBar()->addPermanentWidget(status_section(ToolIcon::zoom, zoom_label_, tr("Zoom"), this));
   set_zoom(zoom_);
   apply_preview_look();
 
@@ -1158,7 +1232,7 @@ QList<BufferInfo> MainWindow::list_buffers() const {
     const DocumentTab* tab = tab_at(i);
     if (tab == nullptr) continue;
     list << BufferInfo{tab->buffer_id(), tab->path(), tab->name(), tab->editor()->is_modified(),
-                       i == tabs_->currentIndex()};
+                       i == tabs_->currentIndex(), tab->text_sources()};
   }
   return list;
 }
@@ -1190,14 +1264,27 @@ bool MainWindow::mcp_listening() const { return mcp_server_ && mcp_server_->is_l
 void MainWindow::update_mcp_server() {
   if (!mcp_enabled_ || mcp_server_name_.isEmpty()) {
     mcp_server_.reset();
+    refresh_mcp_status();
     return;
   }
   const QString name = mcp_listen_name();
-  if (mcp_server_ && mcp_server_->is_listening() && mcp_server_->name() == name) return;
+  if (mcp_server_ && mcp_server_->is_listening() && mcp_server_->name() == name) {
+    refresh_mcp_status();
+    return;
+  }
   mcp_server_ = std::make_unique<McpServer>(*this);
   if (!mcp_server_->listen(name)) {
     show_notice(NoticeKind::warning, tr("⚠ The MCP server cannot listen on %1.").arg(QDir::toNativeSeparators(name)));
+  } else {
+    const QStringList effective = mcp_effective_folders();
+    for (const QString& folder : mcp_allowed_folders_) {
+      if (effective.contains(folder)) continue;
+      show_notice(NoticeKind::warning, tr("⚠ MCP ignores %1: it holds the lumos-md settings or drafts.")
+                                            .arg(QDir::toNativeSeparators(folder)));
+      lumos::log(lumos::LogLevel::debug, kComp, "mcp_folder_ignored", {});
+    }
   }
+  refresh_mcp_status();
 }
 
 QString MainWindow::mcp_listen_name() const {
@@ -1223,7 +1310,7 @@ void MainWindow::choose_mcp_socket_dir() {
   static const QRegularExpression plain(QStringLiteral("^[A-Za-z0-9/._+-]+$"));
   if (!plain.match(arg).hasMatch()) arg = "'" + arg.replace("'", "'\\''") + "'";
   QMessageBox box(QMessageBox::Information, tr("MCP Socket Folder"),
-                  tr("lumos-md listens on %1 while Tools, Enable MCP Server is on. In the agent's settings, "
+                  tr("lumos-md listens on %1 while Tools -> Enable MCP Server is on. In the agent's settings, "
                      "start the MCP server with this command:")
                       .arg(QDir::toNativeSeparators(mcp_socket_in(mcp_socket_dir_))),
                   QMessageBox::Ok, this);
@@ -1237,6 +1324,113 @@ void MainWindow::refresh_mcp_socket_actions() {
   mcp_picked_dir_action_->setText(QDir::toNativeSeparators(mcp_socket_dir_).replace('&', QStringLiteral("&&")));
   mcp_picked_dir_action_->setVisible(!mcp_socket_dir_.isEmpty());
   (mcp_use_socket_dir_ ? mcp_picked_dir_action_ : mcp_default_dir_action_)->setChecked(true);
+}
+
+QStringList MainWindow::mcp_protected_dirs() const {
+  QStringList dirs;
+  if (!settings_.fileName().isEmpty()) dirs << mcp_path_key(QFileInfo(settings_.fileName()).absolutePath());
+  if (!open_tabs_file_.isEmpty()) dirs << mcp_path_key(QFileInfo(open_tabs_file_).absolutePath());
+  if (!drafts_dir_.isEmpty()) dirs << mcp_path_key(drafts_dir_);
+  return dirs;
+}
+
+bool MainWindow::mcp_folder_holds_protected(const QString& folder) const {
+  for (const QString& protected_dir : mcp_protected_dirs())
+    if (mcp_path_allowed(protected_dir, {folder})) return true;
+  return false;
+}
+
+QStringList MainWindow::mcp_allowed_folders() const { return mcp_allowed_folders_; }
+
+QStringList MainWindow::set_mcp_allowed_folders(const QStringList& folders) {
+  QStringList stored;
+  QStringList refused;
+  QStringList seen;
+  for (const QString& folder : folders) {
+    const QString canonical = QFileInfo(folder).canonicalFilePath();
+    if (canonical.isEmpty() || seen.contains(canonical)) continue;  
+    seen << canonical;
+    if (mcp_folder_holds_protected(canonical)) {
+      refused << canonical;
+      continue;
+    }
+    stored << canonical;
+  }
+  mcp_allowed_folders_ = stored;
+  settings_.setValue(kMcpAllowedFolders, mcp_allowed_folders_);
+  refresh_mcp_status();
+  return refused;
+}
+
+QStringList MainWindow::mcp_effective_folders() const {
+  QStringList effective;
+  for (const QString& folder : mcp_allowed_folders_)
+    if (!mcp_folder_holds_protected(folder)) effective << folder;
+  return effective;
+}
+
+void MainWindow::choose_mcp_allowed_folders() {
+  QDialog dialog(this);
+  dialog.setWindowTitle(tr("MCP Allowed Folders"));
+  auto* layout = new QVBoxLayout(&dialog);
+  layout->addWidget(new QLabel(
+      tr("Agents get only the open files in these folders. Without a folder they get no file."), &dialog));
+  auto* list = new QListWidget(&dialog);
+  list->setObjectName(QStringLiteral("folders"));
+  list->setSelectionMode(QAbstractItemView::ExtendedSelection);
+  for (const QString& folder : mcp_allowed_folders_) list->addItem(QDir::toNativeSeparators(folder));
+  layout->addWidget(list);
+  auto* buttons_row = new QHBoxLayout();
+  auto* add_button = new QPushButton(tr("&Add..."), &dialog);
+  auto* remove_button = new QPushButton(tr("&Remove"), &dialog);
+  buttons_row->addWidget(add_button);
+  buttons_row->addWidget(remove_button);
+  buttons_row->addStretch(1);
+  layout->addLayout(buttons_row);
+  connect(add_button, &QPushButton::clicked, &dialog, [this, &dialog, list] {
+    const QString dir = QFileDialog::getExistingDirectory(&dialog, tr("Add Folder"), QDir::homePath());
+    if (dir.isEmpty()) return;
+    const QString canonical = QFileInfo(dir).canonicalFilePath();
+    if (canonical.isEmpty()) return;
+    if (mcp_folder_holds_protected(canonical)) {
+      QMessageBox::warning(&dialog, tr("MCP Allowed Folders"),
+                            tr("%1 holds the lumos-md settings or drafts, so an agent could change this list. "
+                               "Pick a folder inside it.")
+                                .arg(QDir::toNativeSeparators(canonical)));
+      return;
+    }
+    const QString native = QDir::toNativeSeparators(canonical);
+    for (int i = 0; i < list->count(); ++i)
+      if (list->item(i)->text() == native) return;  
+    list->addItem(native);
+  });
+  connect(remove_button, &QPushButton::clicked, list, [list] {
+    for (QListWidgetItem* item : list->selectedItems()) delete item;
+  });
+  auto* box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+  connect(box, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+  connect(box, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  layout->addWidget(box);
+  if (dialog.exec() != QDialog::Accepted) return;
+  QStringList folders;
+  for (int i = 0; i < list->count(); ++i) folders << QDir::fromNativeSeparators(list->item(i)->text());
+  set_mcp_allowed_folders(folders);
+}
+
+void MainWindow::refresh_mcp_status() {
+  if (mcp_status_frame_ == nullptr) return;
+  const bool on = mcp_listening();
+  mcp_status_frame_->setVisible(on);
+  if (!on) return;
+  const QStringList folders = mcp_effective_folders();
+  if (folders.isEmpty()) {
+    mcp_status_frame_->setToolTip(
+        tr("MCP server on. No allowed folder: agents get no file. Tools -> MCP Allowed Folders."));
+    return;
+  }
+  QStringList native;
+  for (const QString& folder : folders) native << QDir::toNativeSeparators(folder);
+  mcp_status_frame_->setToolTip(tr("MCP server on. Agents get the open files in:\n%1").arg(native.join('\n')));
 }
 
 DocumentTab* MainWindow::tab_by_id(quint64 id) const {
@@ -1368,7 +1562,7 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* e) {
 
 void MainWindow::open_dialog() {
   const QStringList paths = QFileDialog::getOpenFileNames(this, tr("Open"), QString(),
-                                                          tr("Markdown (*.md *.markdown *.txt);;All files (*)"));
+                                                          tr("Markdown (%1);;All files (*)").arg(text_file_patterns()));
   for (const QString& path : paths) open_file(path);
 }
 
@@ -1384,7 +1578,7 @@ void MainWindow::fill_recent_menu() {
   recent_menu_->clear();
   const QString home = QDir::homePath();
   for (int i = 0; i < list.size() && i < kRecentFilesMax; ++i) {
-    const QString path = list[i];
+    const QString& path = list[i];
     recent_menu_->addAction(recent_file_label(i + 1, path, home), this, [this, path] { open_recent(path); });
   }
   if (!list.isEmpty()) recent_menu_->addSeparator();
@@ -1646,8 +1840,8 @@ void MainWindow::open_help(const QString& name) {
   }
 }
 
-void MainWindow::table_move(std::optional<lumos::CommandResult> result) {
-  current_tab()->editor()->apply_command(std::move(result));
+void MainWindow::table_move(const std::optional<lumos::CommandResult>& result) {
+  current_tab()->editor()->apply_command(result);
   update_actions();
 }
 
@@ -1717,6 +1911,18 @@ void MainWindow::update_words() {
   words_label_->setText(tr("%1 words").arg(QLocale().toString(words)));
 }
 
+void MainWindow::tab_context_menu(QTabBar* bar, const QPoint& at) {
+  const DocumentTab* tab = tab_at(bar->tabAt(at));
+  if (tab == nullptr) return;
+  const QString path = QDir::toNativeSeparators(tab->path());
+  QMenu menu(this);
+  QAction* copy_path =
+      menu.addAction(tr("Copy &Path"), this, [path] { QGuiApplication::clipboard()->setText(path); });
+  copy_path->setObjectName(QStringLiteral("tab_copy_path"));
+  copy_path->setEnabled(!path.isEmpty());
+  menu.exec(bar->mapToGlobal(at));
+}
+
 void MainWindow::context_menu(DocumentTab* tab, const QPoint& at) {
   lumos::qt::SourceEditor* editor = tab->editor();
   QMenu menu(this);
@@ -1753,7 +1959,7 @@ void MainWindow::paste_from_html() {
   std::optional<lumos::CommandResult> result =
       paste_html(editor->document(), editor->selection(), mime->html(), editor->newline());
   if (result)
-    editor->apply_command(std::move(result));
+    editor->apply_command(result);
   else
     editor->paste();
   update_actions();
@@ -1947,4 +2153,7 @@ void MainWindow::update_title() {
   setWindowTitle((tab->read_only_file() ? tr("%1[*] [Read-Only] - lumos-md") : tr("%1[*] - lumos-md"))
                      .arg(tab->name()));
   setWindowModified(tab->editor()->is_modified());
+  const QString path = QDir::toNativeSeparators(tab->path());
+  path_label_->setText(path);
+  path_label_->parentWidget()->setToolTip(path);
 }

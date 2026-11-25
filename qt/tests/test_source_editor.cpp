@@ -125,6 +125,11 @@ class TestSourceEditor : public QObject {
   void inline_images_requests();
   void inline_images_sizes();
   void inline_images_mouse();
+  void inline_images_after_edit_above();
+  void heading_size_with_pixel_font();
+  void replace_text_invalid_utf8();
+  void failed_command_keeps_last_step();
+  void ime_replace_range_before_line();
   void inline_images_reload_and_references();
   void home_end_on_rows();
   void modification_signals();
@@ -706,6 +711,59 @@ void TestSourceEditor::inline_images_mouse() {
   ed.set_cursor_position(image_start);
   key(&ed, Qt::Key_Down);
   QCOMPARE(ed.cursor_position(), third_start);
+}
+
+void TestSourceEditor::inline_images_after_edit_above() {
+  SourceEditor ed;
+  ed.resize(600, 400);
+  ed.set_image_max_height(320);
+  const std::string text = "top\n\none\n\ntwo\n\n[l](o.md)![i](a.png)\n";
+  ed.set_text(text);
+  ed.set_image("a.png", QImage(100, 60, QImage::Format_RGB32));
+  ed.show();
+  QVERIFY(QTest::qWaitForWindowExposed(&ed));
+
+  std::vector<lumos::LinkTarget> got;
+  QObject::connect(&ed, &SourceEditor::linkActivated, [&](const lumos::LinkTarget& t) { got.push_back(t); });
+
+  ed.set_cursor_position(0);
+  ed.insert_text("xxxxx");
+  const std::size_t image_start = text.find('!') + 5;
+  ed.set_cursor_position(text.find('[') + 5);  
+  const int target_x = ed.cursor_rect().x() + 10;
+  const int target_y =
+      ed.cursor_rect().y() + ed.cursor_rect().height() + QFontMetrics(ed.font()).lineSpacing() / 4 + 30;
+
+  ed.set_cursor_position(0);
+  QTest::mouseClick(ed.viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(target_x, target_y));
+  QCOMPARE(ed.cursor_position(), image_start);
+
+  ed.set_cursor_position(0);
+  QTest::mouseClick(ed.viewport(), Qt::LeftButton, Qt::ControlModifier, QPoint(target_x, target_y));
+  QCOMPARE(got.size(), std::size_t{1});
+  QCOMPARE(got[0].url, std::string("a.png"));
+
+  std::vector<std::string> requested;
+  QObject::connect(&ed, &SourceEditor::imageRequested, [&](const std::string& url) { requested.push_back(url); });
+  const std::string ref = "top\n\none\n\ntwo\n\n![d][r]\n\nthree\n\nfour\n\n[r]: z.png\n";
+  ed.set_text(ref);
+  ed.set_cursor_position(0);
+  ed.insert_text("xxxxx");
+  requested.clear();
+  const std::size_t at = ref.find("z.png") + 5;  
+  ed.select(at, at + 1);
+  ed.insert_text("kk");
+  QCOMPARE(requested, (std::vector<std::string>{"kk.png"}));
+}
+
+void TestSourceEditor::heading_size_with_pixel_font() {
+  SourceEditor ed;
+  ed.resize(600, 400);
+  QFont f = ed.font();
+  f.setPixelSize(30);
+  ed.setFont(f);
+  ed.set_text("# h\nplain\n");
+  QVERIFY(ed.line_height(0) > ed.line_height(1));
 }
 
 void TestSourceEditor::home_end_on_rows() {
@@ -1639,6 +1697,9 @@ void TestSourceEditor::marks_move_with_edits() {
   ed.set_cursor_position(5);
   QTest::keyClicks(&ed, "z");
   QCOMPARE(ed.marks(1), (std::vector<ByteRange>{{12, 14}}));
+  ed.set_cursor_position(12);
+  QTest::keyClicks(&ed, "w");
+  QCOMPARE(ed.marks(1), (std::vector<ByteRange>{{13, 15}}));
   ed.set_marks(2, {ByteRange{0, 3}, ByteRange{2, 5}}, f);
   QCOMPARE(ed.marks(2), (std::vector<ByteRange>{{0, 5}}));
   ed.set_marks(2, {}, f);
@@ -1964,6 +2025,51 @@ void TestSourceEditor::go_to_line_on_a_short_text_does_not_scroll() {
   ed.set_text("line 0\nline 1\nline 2");
   ed.go_to_line(1);
   QCOMPARE(ed.verticalScrollBar()->value(), 0);
+}
+
+void TestSourceEditor::replace_text_invalid_utf8() {
+  SourceEditor ed;
+  ed.set_text("a");
+  QTest::keyClicks(&ed, "c");
+  QVERIFY(ed.is_modified());
+  QSignalSpy modified(&ed, &SourceEditor::modificationChanged);
+  QSignalSpy changed(&ed, &SourceEditor::textChanged);
+  ed.replace_text("a\x92" "b");
+  QCOMPARE(ed.text(), std::string("a\x92" "b"));
+  QVERIFY(ed.is_modified());
+  QCOMPARE(changed.count(), 1);
+  for (const auto& args : modified) QVERIFY(args.at(0).toBool());
+
+  ed.set_text("x");
+  modified.clear();
+  ed.replace_text("x\x92" "y");
+  QCOMPARE(ed.text(), std::string("x\x92" "y"));
+  QVERIFY(ed.is_modified());
+  QCOMPARE(modified.count(), 1);
+  check_editor(ed);
+}
+
+void TestSourceEditor::failed_command_keeps_last_step() {
+  SourceEditor ed;
+  ed.set_text("- don\x92" "t\n");
+  ed.set_cursor_position(7);
+  QTest::keyClicks(&ed, "x");
+  const std::string typed = "- don\x92" "tx\n";
+  QCOMPARE(ed.text(), typed);
+  ed.select(2, 5);
+  QVERIFY(ed.apply_command(toggle_inline(ed.document(), ed.selection(), InlineKind::strong)));
+  QCOMPARE(ed.text(), typed);
+  QVERIFY(ed.canUndo());
+}
+
+void TestSourceEditor::ime_replace_range_before_line() {
+  SourceEditor ed;
+  ed.set_text("abcdef");
+  ed.set_cursor_position(1);
+  QInputMethodEvent e;
+  e.setCommitString("X", -3, 3);
+  QApplication::sendEvent(&ed, &e);
+  QCOMPARE(ed.text(), std::string("Xbcdef"));
 }
 
 QTEST_MAIN(TestSourceEditor)

@@ -98,6 +98,7 @@ constexpr auto kThemes = std::to_array<Theme>({
 
 constexpr char16_t kStylesheet[] = uR"(
 QTabWidget::pane { border: none; }
+QStatusBar::item { border: none; }
 QTabBar::tab {
   background: {{bg_bar}};
   color: {{fg_secondary}};

@@ -168,7 +168,9 @@ boundaries. All positions are UTF-8 byte offsets, as in the core.
     `keep_position` (a reload of the same file) keeps the cursor, the
     selection and the scroll position as far as the new text allows.
   - `replace_text(text)`: the whole text as one undo step; only the
-    changed middle is edited, so the cursor stays.
+    changed middle is edited, so the cursor stays. A changed middle that
+    is not valid UTF-8 cannot be an edit: then the whole text is loaded,
+    the undo history goes and the text counts as not saved.
   - `insert_text(text)`: replaces the selection; one undo step.
   - `text()` (a copy, for saving), `length()`.
   - `is_modified()`, `mark_saved()` (keeps the undo history),

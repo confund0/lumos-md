@@ -50,12 +50,12 @@ int run_as_mcp_bridge(int argc, char** argv) {
   parser.addOption(mcp);
   const QCommandLineOption debug("debug", "Write debug log lines, also to stderr.");
   parser.addOption(debug);
-  const QCommandLineOption mcp_dir("mcp-dir", "The socket folder set in Tools, MCP Socket Folder.", "dir");
+  const QCommandLineOption mcp_dir("mcp-dir", "The socket folder set in Tools -> MCP Socket Folder.", "dir");
   parser.addOption(mcp_dir);
   parser.process(app);
 
   if (!parser.positionalArguments().isEmpty()) {
-    std::cerr << "lumos-md --mcp takes no file arguments." << std::endl;
+    std::cerr << "lumos-md --mcp takes no file arguments.\n";
     return 2;
   }
 

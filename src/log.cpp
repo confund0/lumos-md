@@ -64,7 +64,7 @@ std::string timestamp() {
   char buf[32];
   const std::size_t n = std::strftime(buf, sizeof buf, "%Y-%m-%dT%H:%M:%S", &tm);
   char out[48];
-  std::snprintf(out, sizeof out, "%.*s.%03dZ", static_cast<int>(n), buf, static_cast<int>(ms));
+  static_cast<void>(std::snprintf(out, sizeof out, "%.*s.%03dZ", static_cast<int>(n), buf, static_cast<int>(ms)));
   return out;
 }
 

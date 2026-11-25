@@ -169,11 +169,17 @@ class Regex {
     return Result::hit;
   }
 
+  ByteRange hit() const {
+    const PCRE2_SIZE* ov = pcre2_get_ovector_pointer(data_.get());
+    return ByteRange{ov[0], ov[1]};
+  }
+
   std::optional<ByteRange> group(std::uint32_t n) const {
     if (n >= pcre2_get_ovector_count(data_.get())) return std::nullopt;
     const PCRE2_SIZE* ov = pcre2_get_ovector_pointer(data_.get());
-    if (ov[2 * n] == PCRE2_UNSET) return std::nullopt;
-    return ByteRange{ov[2 * n], ov[2 * n + 1]};
+    const std::size_t i = 2 * std::size_t{n};
+    if (ov[i] == PCRE2_UNSET) return std::nullopt;
+    return ByteRange{ov[i], ov[i + 1]};
   }
 
  private:
@@ -251,7 +257,7 @@ bool for_each_regex_hit(std::string_view text, Regex& re, bool whole_word,
         options = 0;
         continue;
       }
-      const ByteRange m = *re.group(0);
+      const ByteRange m = re.hit();
       const ByteRange hit{piece.start + m.start, piece.start + m.end};
       if (!whole_word || whole_word_ok(text, hit.start, hit.end)) fn(hit, sub);
       pos = m.end;
@@ -336,7 +342,7 @@ std::optional<std::string> expand_at(std::string_view text, ByteRange match, std
   const std::size_t end = match.end - piece->start;
   for (const std::uint32_t o : {PCRE2_ANCHORED, PCRE2_ANCHORED | PCRE2_NOTEMPTY_ATSTART}) {
     if (re->match(sub, start, o) != Regex::Result::hit) return std::nullopt;
-    const ByteRange m = *re->group(0);
+    const ByteRange m = re->hit();
     if (m.end == end) return expand(sub, *re, parse_replacement(replacement));
     if (m.start != m.end) return std::nullopt;
   }

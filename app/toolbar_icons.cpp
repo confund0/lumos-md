@@ -156,16 +156,51 @@ void draw(QPainter& p, ToolIcon kind, const QColor& c) {
       p.drawPolyline(QPolygonF({{4, 11.5}, {2, 13}, {4, 14.5}}));
       p.drawPolyline(QPolygonF({{12, 11.5}, {14, 13}, {12, 14.5}}));
       break;
+    case ToolIcon::paragraph: glyph(p, QString(QChar(0x00B6)), 13, 8, 8); break;
+    case ToolIcon::caret:
+      p.drawLine(QPointF(8, 2.5), QPointF(8, 13.5));
+      p.drawLine(QPointF(5.5, 2), QPointF(10.5, 2));
+      p.drawLine(QPointF(5.5, 14), QPointF(10.5, 14));
+      break;
+    case ToolIcon::words:
+      p.drawLine(QPointF(1.5, 3), QPointF(14.5, 3));
+      p.drawLine(QPointF(1.5, 8), QPointF(14.5, 8));
+      p.drawLine(QPointF(1.5, 13), QPointF(9.5, 13));
+      break;
+    case ToolIcon::document:
+      p.drawPolygon(QPolygonF({{3.5, 1.5}, {9.5, 1.5}, {12.5, 4.5}, {12.5, 14.5}, {3.5, 14.5}}));
+      p.drawPolyline(QPolygonF({{9.5, 1.5}, {9.5, 4.5}, {12.5, 4.5}}));
+      p.drawLine(QPointF(5.5, 8), QPointF(10.5, 8));
+      p.drawLine(QPointF(5.5, 11), QPointF(10.5, 11));
+      break;
+    case ToolIcon::zoom: {
+      p.drawEllipse(QPointF(6.5, 6.5), 4.5, 4.5);
+      p.drawLine(QPointF(4.5, 6.5), QPointF(8.5, 6.5));
+      p.drawLine(QPointF(6.5, 4.5), QPointF(6.5, 8.5));
+      QPen thick = p.pen();
+      thick.setWidthF(2.2);
+      p.setPen(thick);
+      p.drawLine(QPointF(10, 10), QPointF(14, 14));
+      break;
+    }
+    case ToolIcon::mcp:
+      p.drawRoundedRect(QRectF(3, 7, 10, 7), 1.5, 1.5);
+      p.drawLine(QPointF(6, 2), QPointF(6, 7));
+      p.drawLine(QPointF(10, 2), QPointF(10, 7));
+      break;
   }
 }
 
 class PaintedIcon : public QIconEngine {
  public:
-  explicit PaintedIcon(ToolIcon kind) : kind_(kind) {}
+  explicit PaintedIcon(ToolIcon kind, const QColor& fixed_color = QColor()) : kind_(kind), fixed_color_(fixed_color) {}
 
   void paint(QPainter* p, const QRect& rect, QIcon::Mode mode, QIcon::State) override {
-    const QPalette pal = QGuiApplication::palette();
-    const QColor c = pal.color(mode == QIcon::Disabled ? QPalette::Disabled : QPalette::Active, QPalette::ButtonText);
+    QColor c = fixed_color_;
+    if (!c.isValid()) {
+      const QPalette pal = QGuiApplication::palette();
+      c = pal.color(mode == QIcon::Disabled ? QPalette::Disabled : QPalette::Active, QPalette::ButtonText);
+    }
     p->save();
     p->setRenderHint(QPainter::Antialiasing);
     p->translate(rect.topLeft());
@@ -191,12 +226,14 @@ class PaintedIcon : public QIconEngine {
     return pm;
   }
 
-  QIconEngine* clone() const override { return new PaintedIcon(kind_); }
+  QIconEngine* clone() const override { return new PaintedIcon(kind_, fixed_color_); }
 
  private:
   ToolIcon kind_;
+  QColor fixed_color_;
 };
 
 }  
 
 QIcon toolbar_icon(ToolIcon kind) { return QIcon(new PaintedIcon(kind)); }
+QIcon toolbar_icon(ToolIcon kind, const QColor& color) { return QIcon(new PaintedIcon(kind, color)); }

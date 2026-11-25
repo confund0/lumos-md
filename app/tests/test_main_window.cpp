@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QGuiApplication>
+#include <QLabel>
 #include <QMenu>
 #include <QMimeData>
 #include <QDir>
@@ -15,6 +16,7 @@
 #include <QToolButton>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTimer>
 
 #include <cmath>
 #include <memory>
@@ -128,6 +130,8 @@ class TestMainWindow : public QObject {
   void theme_png();
   void tab_close_button_closes_its_tab();
   void help_pages_open_read_only();
+  void status_bar_shows_the_path();
+  void tab_menu_copies_the_path();
 
  private:
   QAction* find_action(const QString& text) const;
@@ -1097,6 +1101,47 @@ void TestMainWindow::help_pages_open_read_only() {
   QVERIFY(window_->open_file(about));
   QCOMPARE(window_->current_tab()->path(), about);
   QVERIFY(window_->current_tab()->editor()->is_read_only());
+}
+
+void TestMainWindow::status_bar_shows_the_path() {
+  auto* label = window_->findChild<QLabel*>(QStringLiteral("path"));
+  QVERIFY(label != nullptr);
+  QVERIFY(label->text().isEmpty());
+  const QString a = write_file(QDir(dir_->path()), QStringLiteral("a.md"), QStringLiteral("# A\n"));
+  QVERIFY(window_->open_file(a));
+  QCOMPARE(label->text(), QDir::toNativeSeparators(a));
+  QCOMPARE(label->parentWidget()->toolTip(), QDir::toNativeSeparators(a));
+  window_->new_tab();
+  QVERIFY(label->text().isEmpty());
+  tab_widget()->setCurrentIndex(0);
+  QCOMPARE(label->text(), QDir::toNativeSeparators(a));
+}
+
+void TestMainWindow::tab_menu_copies_the_path() {
+  const QString a = write_file(QDir(dir_->path()), QStringLiteral("a.md"), QStringLiteral("# A\n"));
+  QVERIFY(window_->open_file(a));
+  window_->new_tab();
+  window_->show();
+  QVERIFY(QTest::qWaitForWindowExposed(window_.get()));
+  QTabBar* bar = tab_widget()->tabBar();
+  QGuiApplication::clipboard()->setText(QStringLiteral("old"));
+
+  const auto copy_path_on = [bar](int index) {
+    bool enabled = false;
+    QTimer::singleShot(0, [&enabled] {
+      auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+      QAction* action = menu != nullptr ? menu->findChild<QAction*>(QStringLiteral("tab_copy_path")) : nullptr;
+      enabled = action != nullptr && action->isEnabled();
+      if (enabled) action->trigger();
+      if (menu != nullptr) menu->close();
+    });
+    emit bar->customContextMenuRequested(bar->tabRect(index).center());
+    return enabled;
+  };
+  QVERIFY(!copy_path_on(1));
+  QCOMPARE(QGuiApplication::clipboard()->text(), QStringLiteral("old"));
+  QVERIFY(copy_path_on(0));
+  QCOMPARE(QGuiApplication::clipboard()->text(), QDir::toNativeSeparators(a));
 }
 
 #include "test_main_window.moc"

@@ -229,7 +229,7 @@ TreeEdit reparse_outside_leaf(const Features& features, const TextSource& text, 
     Node n = tree.node(id);
     n.start = static_cast<std::size_t>(static_cast<std::ptrdiff_t>(n.start) + shift);
     n.end = static_cast<std::size_t>(static_cast<std::ptrdiff_t>(n.end) + shift);
-    copied.push_back(std::move(n));
+    copied.push_back(n);
   }
   LeafScratch scratch;
   std::vector<Node>& prefixes = scratch.prefixes;

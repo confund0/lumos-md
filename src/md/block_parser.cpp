@@ -421,7 +421,7 @@ bool BlockParser::try_start_table(std::size_t index, const Line& line, std::size
   o.start = table_start;
   o.content_end = line.end();
   recs_[o.rec].kind = NodeKind::table;
-  o.table_align = std::move(delim->align);
+  o.table_align = delim->align;
   o.table_rows = 1;  
   o.table_filled_cells = header_count;
 
@@ -935,12 +935,10 @@ void BlockParser::open_new_blocks(LineCursor& cur, const Line& line, std::size_t
       o.content_end = line.end();
       out_->nodes[o.content].virtual_spaces = static_cast<std::uint8_t>(cur.partial_rest());
       added = NodeKind::code_block;
-    } else if (!indented && features_.tables && ck == NodeKind::table &&
-               try_add_table_row(container, line, fns, rest)) {
-      added = NodeKind::table;
-      table_line_ = true;
-    } else if (!indented && features_.tables && ck == NodeKind::paragraph && !open_[container].table_tried &&
-               try_start_table(container, line, fns, rest)) {
+    } else if (!indented && features_.tables &&
+               ((ck == NodeKind::table && try_add_table_row(container, line, fns, rest)) ||
+                (ck == NodeKind::paragraph && !open_[container].table_tried &&
+                 try_start_table(container, line, fns, rest)))) {
       added = NodeKind::table;
       table_line_ = true;
     } else {

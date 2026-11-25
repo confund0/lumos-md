@@ -1,3 +1,20 @@
+lumos-md (0.4.1-1) unstable; urgency=medium
+
+  * Added Tools -> MCP Allowed Folders: agents get only the open files
+    in these folders. With no folder they get no file. After the
+    update, add your folders there.
+  * Added sections to the status bar: the block at the cursor, the
+    path of the current tab, line and column, words and the zoom.
+  * Added Copy Path to the menu of a right click on a tab.
+  * Fixed a draft recovery or a reload of a file with bytes that are
+    not valid UTF-8: the editor kept the old text.
+  * Fixed a possible crash when a file reloads during a drag.
+  * Fixed a click on an image after an edit above it: it used the
+    wrong image.
+  * Security and privacy fixes. Update recommended.
+
+ -- confund0 <110197472+confund0@users.noreply.github.com>  Wed, 25 Nov 2026 12:00:00 +0000
+
 lumos-md (0.4.0-1) unstable; urgency=medium
 
   * Added the Help menu: Features, MCP Server and About open as

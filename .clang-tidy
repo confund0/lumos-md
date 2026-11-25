@@ -1,0 +1,23 @@
+# Run through tools/check.py tidy. Turned off:
+# - easily-swappable-parameters, enum-size: style only.
+# - narrowing-conversions, misplaced-widening-cast: -Wconversion and
+#   -Wsign-conversion already force explicit index casts.
+# - assignment-in-if-condition: the parser idiom; -Wparentheses catches
+#   the = for == slip.
+# - cert-err58-cpp: static Qt and std objects; nothing catches at start.
+Checks: >
+  -*,
+  clang-analyzer-*,
+  bugprone-*,
+  performance-*,
+  concurrency-*,
+  cert-err33-c,
+  cert-err34-c,
+  cert-oop54-cpp,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-misplaced-widening-cast,
+  -bugprone-assignment-in-if-condition,
+  -performance-enum-size
+WarningsAsErrors: '*'
+HeaderFilterRegex: '.*/(src|app|qt/src|qt/include|include/lumos)/.*'

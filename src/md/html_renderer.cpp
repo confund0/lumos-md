@@ -134,7 +134,6 @@ void append_literal(const SyntaxTree& tree, const TextSource& text, NodeId id, b
     const Node& k = tree.node(c);
     if (k.start > pos) {
       for_chunks(text, pos, k.start, put);
-      ends_with_prefix = false;
     }
     prev_cr = false;
     out.append(k.virtual_spaces, ' ');

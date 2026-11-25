@@ -163,18 +163,18 @@ TEST_CASE("handle_mcp_line: read_open_file error texts", "[mcp_bridge]") {
   win.answer = std::nullopt;
   result = result_of(handle_mcp_line(call_read_open_file(R"("/a/b.md")"), win.ask()));
   CHECK(result.value("isError").toBool() == true);
-  CHECK(content_text(result) == "lumos-md is not running, or Tools, Enable MCP Server is off. Read and edit the file on disk.");
+  CHECK(content_text(result) == "lumos-md is not running, or Tools -> Enable MCP Server is off. Read and edit the file on disk.");
 
   win.answer = QJsonObject{{"error", "bad_request"}};
   result = result_of(handle_mcp_line(call_read_open_file(R"("/a/b.md")"), win.ask()));
   CHECK(result.value("isError").toBool() == true);
-  CHECK(content_text(result) == "lumos-md is not running, or Tools, Enable MCP Server is off. Read and edit the file on disk.");
+  CHECK(content_text(result) == "lumos-md is not running, or Tools -> Enable MCP Server is off. Read and edit the file on disk.");
 
   win.answer = std::nullopt;
   result = result_of(handle_mcp_line(
       R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_open_files"}})", win.ask()));
   CHECK(result.value("isError").toBool() == true);
-  CHECK(content_text(result) == "lumos-md is not running, or Tools, Enable MCP Server is off. Read and edit the file on disk.");
+  CHECK(content_text(result) == "lumos-md is not running, or Tools -> Enable MCP Server is off. Read and edit the file on disk.");
 }
 
 TEST_CASE("handle_mcp_line: read_open_file bad_path, the window is not asked", "[mcp_bridge]") {
@@ -215,22 +215,39 @@ TEST_CASE("handle_mcp_line: show_file error texts", "[mcp_bridge]") {
   CHECK(result.value("isError").toBool() == true);
   CHECK(content_text(result) == "lumos-md has a dialog open. Ask the user to close it, then call show_file again.");
 
+  win.answer = QJsonObject{{"shown", false}, {"reason", "not_allowed"}};
+  result = result_of(handle_mcp_line(call_show_file(R"("/a/b.md")"), win.ask()));
+  CHECK(result.value("isError").toBool() == true);
+  CHECK(content_text(result) ==
+        "/a/b.md is outside the folders the user allows for agents. Ask the user to add its folder in "
+        "lumos-md: Tools -> MCP Allowed Folders.");
+
   win.answer = QJsonObject{{"shown", false}, {"reason", "not_file"}};
   result = result_of(handle_mcp_line(call_show_file(R"("/a/b.md")"), win.ask()));
   CHECK(result.value("isError").toBool() == true);
   CHECK(content_text(result) == "/a/b.md does not exist or is not a file.");
+
+  win.answer = QJsonObject{{"shown", false}, {"reason", "unsupported_type"}};
+  result = result_of(handle_mcp_line(call_show_file(R"("/a/key")"), win.ask()));
+  CHECK(result.value("isError").toBool() == true);
+  CHECK(content_text(result) == "lumos-md shows only files named *.md *.markdown *.txt (a link: its target's name).");
 
   win.answer = QJsonObject{{"shown", false}, {"reason", "cannot_open"}, {"detail", "Permission denied"}};
   result = result_of(handle_mcp_line(call_show_file(R"("/a/b.md")"), win.ask()));
   CHECK(result.value("isError").toBool() == true);
   CHECK(content_text(result) == "lumos-md cannot open b.md: Permission denied");
 
+  win.answer = QJsonObject{{"shown", false}, {"reason", "some_new_reason"}};
+  result = result_of(handle_mcp_line(call_show_file(R"("/a/b.md")"), win.ask()));
+  CHECK(result.value("isError").toBool() == true);
+  CHECK(content_text(result) == "lumos-md refused: some_new_reason.");
+
   for (const std::optional<QJsonObject>& answer :
        {std::optional<QJsonObject>(), std::optional<QJsonObject>(QJsonObject{{"error", "bad_request"}})}) {
     win.answer = answer;
     result = result_of(handle_mcp_line(call_show_file(R"("/a/b.md")"), win.ask()));
     CHECK(result.value("isError").toBool() == true);
-    CHECK(content_text(result) == "lumos-md is not running, or Tools, Enable MCP Server is off.");
+    CHECK(content_text(result) == "lumos-md is not running, or Tools -> Enable MCP Server is off.");
   }
 }
 

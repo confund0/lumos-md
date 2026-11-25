@@ -20,8 +20,10 @@ class QAction;
 class QComboBox;
 class QFileSystemWatcher;
 class QFont;
+class QFrame;
 class QLabel;
 class QMenu;
+class QTabBar;
 class QTabWidget;
 class QTimer;
 class QToolButton;
@@ -32,6 +34,7 @@ struct BufferInfo {
   QString name;  
   bool modified = false;
   bool current = false;
+  QStringList sources;  
 };
 
 class MainWindow : public QMainWindow {
@@ -64,6 +67,10 @@ class MainWindow : public QMainWindow {
   void set_mcp_server_name(const QString& name);
   bool mcp_listening() const;
 
+  QStringList mcp_allowed_folders() const;
+  QStringList set_mcp_allowed_folders(const QStringList& folders);
+  QStringList mcp_effective_folders() const;
+
  protected:
   void closeEvent(QCloseEvent* e) override;
   void changeEvent(QEvent* e) override;
@@ -94,11 +101,12 @@ class MainWindow : public QMainWindow {
   void update_position();
   void update_words();
   void context_menu(DocumentTab* tab, const QPoint& at);
+  void tab_context_menu(QTabBar* bar, const QPoint& at);
   void toggle(lumos::InlineKind kind);
   void toggle(lumos::BlockKind kind);
   void set_heading(int level);
   void insert_table(int rows, int cols);
-  void table_move(std::optional<lumos::CommandResult> result);
+  void table_move(const std::optional<lumos::CommandResult>& result);
   void paste_from_html();
   void toggle_link();
   void insert_picture();
@@ -131,6 +139,10 @@ class MainWindow : public QMainWindow {
   void set_mcp_use_socket_dir(bool on);
   void choose_mcp_socket_dir();
   void refresh_mcp_socket_actions();
+  QStringList mcp_protected_dirs() const;
+  bool mcp_folder_holds_protected(const QString& folder) const;
+  void choose_mcp_allowed_folders();
+  void refresh_mcp_status();
 
   QSettings settings_;
   QString open_tabs_file_;
@@ -190,6 +202,7 @@ class MainWindow : public QMainWindow {
   QAction* format_table_ = nullptr;
   QList<QAction*> table_moves_;
   QLabel* block_state_ = nullptr;
+  QLabel* path_label_ = nullptr;  
   QLabel* position_label_ = nullptr;
   QLabel* words_label_ = nullptr;
   QTimer* words_timer_ = nullptr;
@@ -204,6 +217,9 @@ class MainWindow : public QMainWindow {
   bool mcp_use_socket_dir_ = false;
   QAction* mcp_default_dir_action_ = nullptr;
   QAction* mcp_picked_dir_action_ = nullptr;
+  QStringList mcp_allowed_folders_;
+  QFrame* mcp_status_frame_ = nullptr;
+  QLabel* mcp_status_label_ = nullptr;
   std::unique_ptr<McpServer> mcp_server_;
   PreviewSplitter* splitter_ = nullptr;
   PreviewView* preview_ = nullptr;

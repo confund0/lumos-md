@@ -25,8 +25,8 @@ LogState& state() {
 }
 
 void write_stderr(std::string_view text) {
-  std::fwrite(text.data(), 1, text.size(), stderr);
-  std::fputc('\n', stderr);
+  static_cast<void>(std::fwrite(text.data(), 1, text.size(), stderr));
+  static_cast<void>(std::fputc('\n', stderr));
 }
 
 bool open_file(LogState& s) {

@@ -26,7 +26,7 @@ lumos-md @PROJECT_VERSION@: a Markdown editor for plain notes.
   start opens its files there. The tabs come back at the next start.
 - **AI agents.** An AI agent can read your open files with their
   unsaved changes and show you a file or a line, through the Model
-  Context Protocol (MCP). See Help, MCP Server.
+  Context Protocol (MCP). See Help -> MCP Server.
 - **C++ and Qt 6.** A fast native program with no web engine. The
   Markdown core is portable C++20 and has no toolkit code, so other
   toolkits and systems can follow. Packages exist for Alpine Linux and

@@ -16,10 +16,17 @@ both texts side by side.
 
 ## Turn it on
 
-1. In lumos-md: Tools, Enable MCP Server. It is off by default. While it
-   is on, any program that runs as your user can read the open files,
-   also text that is not saved.
-2. Tell your agent about lumos-md: copy the text below into its prompt.
+1. In lumos-md: Tools -> Enable MCP Server. It is off by default. While it
+   is on, any program that runs as your user can read the open files
+   in the allowed folders, also text that is not saved. The status bar
+   shows MCP in yellow; its tool tip lists the folders.
+2. Tools -> MCP Allowed Folders: add the folders an agent may work in
+   (Add... once per folder). Agents get only the open files in these
+   folders; without a folder they get no file. You still open and edit
+   any file yourself. A folder that holds the lumos-md settings or
+   drafts cannot be added. The list opens by itself when you turn the
+   server on with no folder.
+3. Tell your agent about lumos-md: copy the text below into its prompt.
    The agent adds the server to its own settings, or tells you the
    steps for your setup.
 
@@ -31,7 +38,7 @@ yourself, tell me the exact steps for the program you run in, and
 whether it needs a restart. If you run in a sandbox with its own
 XDG_RUNTIME_DIR (bwrap, Flatpak, a container), you cannot see the
 default socket: then tell me to pick a folder that we both can see in
-lumos-md, Tools, MCP Socket Folder, and run `lumos-md --mcp --mcp-dir
+lumos-md, Tools -> MCP Socket Folder, and run `lumos-md --mcp --mcp-dir
 <that folder>` instead.
 
 How to use it: before you change a file, call read_open_file with its
@@ -59,6 +66,9 @@ With a socket folder, the args are `["--mcp", "--mcp-dir", "/path/to/folder"]`.
 
 ## Tools
 
+All three tools see only files in the allowed folders. A link counts by
+the file it points to.
+
 - `list_open_files`: the open tabs in tab order, each with `path`
   (`null` for an Untitled tab), `name`, `modified` (unsaved changes) and
   `current` (the tab in front).
@@ -68,7 +78,9 @@ With a socket folder, the args are `["--mcp", "--mcp-dir", "/path/to/folder"]`.
   opens the file in a tab or picks its open tab, makes it current and
   raises the window. With `line`, the cursor goes to that line. The
   keyboard focus does not move, and the file does not change. On
-  Wayland the desktop may only mark the window as urgent.
+  Wayland the desktop may only mark the window as urgent. It opens only
+  files named `*.md`, `*.markdown` or `*.txt`; for a link, the name of
+  the file it points to counts.
 
 ## Try it by hand
 
@@ -92,4 +104,4 @@ The answer to the list call has the tabs as JSON text:
 
 When lumos-md is not running or the server is off, each tool call
 answers with `"isError":true` and the text "lumos-md is not running, or
-Tools, Enable MCP Server is off."
+Tools -> Enable MCP Server is off."

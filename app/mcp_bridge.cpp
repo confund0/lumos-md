@@ -12,6 +12,7 @@
 #include <iostream>
 #include <string>
 
+#include "file_types.hpp"
 #include "lumos/log.hpp"
 
 namespace {
@@ -30,7 +31,7 @@ bool known_protocol_version(const QString& version) {
 }
 
 QJsonValue error_id(const QJsonObject& request) {
-  const QJsonValue id = request.value("id");
+  QJsonValue id = request.value("id");
   if (id.isDouble() || id.isString()) return id;
   return QJsonValue();
 }
@@ -94,7 +95,7 @@ QJsonObject call_list_open_files(const AskWindow& ask) {
   const std::optional<QJsonObject> answer = ask(QJsonObject{{"v", 1}, {"op", "list"}});
   if (!answer || !answer->value("files").isArray()) {
     lumos::log(lumos::LogLevel::debug, kComp, "bridge_call", {{"tool", "list"}, {"result", "no_answer"}});
-    return tool_result("lumos-md is not running, or Tools, Enable MCP Server is off. Read and edit the file on disk.",
+    return tool_result("lumos-md is not running, or Tools -> Enable MCP Server is off. Read and edit the file on disk.",
                         true);
   }
   lumos::log(lumos::LogLevel::debug, kComp, "bridge_call", {{"tool", "list"}, {"result", "ok"}});
@@ -133,7 +134,7 @@ QJsonObject call_read_open_file(const AskWindow& ask, const QJsonObject& argumen
     }
   }
   if (std::string_view(result) == "no_answer") {
-    text = "lumos-md is not running, or Tools, Enable MCP Server is off. Read and edit the file on disk.";
+    text = "lumos-md is not running, or Tools -> Enable MCP Server is off. Read and edit the file on disk.";
   }
   lumos::log(lumos::LogLevel::debug, kComp, "bridge_call", {{"tool", "read"}, {"result", result}});
   return tool_result(text, is_error);
@@ -162,14 +163,15 @@ QJsonObject call_show_file(const AskWindow& ask, const QJsonObject& arguments) {
   QJsonObject request{{"v", 1}, {"op", "show"}, {"path", path}};
   if (has_line) request.insert("line", static_cast<int>(line_v.toDouble()));
   const std::optional<QJsonObject> answer = ask(request);
-  const QJsonValue shown_v = answer ? answer->value("shown") : QJsonValue();
-  const QString reason = answer ? answer->value("reason").toString() : QString();
+  const QJsonObject reply = answer.value_or(QJsonObject());
+  const QJsonValue shown_v = reply.value("shown");
+  const QString reason = reply.value("reason").toString();
   const char* result = "no_answer";
-  QString text = "lumos-md is not running, or Tools, Enable MCP Server is off.";
+  QString text = "lumos-md is not running, or Tools -> Enable MCP Server is off.";
   if (shown_v.isBool() && shown_v.toBool()) {
     result = "ok";
     if (has_line) {
-      const int shown_line = answer->value("line").toInt();
+      const int shown_line = reply.value("line").toInt();
       const bool past_end = shown_line < line_v.toDouble();
       text = name + " is the current tab in lumos-md, at line " + QString::number(shown_line) +
              (past_end ? ", its last line." : ".");
@@ -179,12 +181,22 @@ QJsonObject call_show_file(const AskWindow& ask, const QJsonObject& arguments) {
   } else if (shown_v.isBool() && reason == "busy") {
     result = "busy";
     text = "lumos-md has a dialog open. Ask the user to close it, then call show_file again.";
+  } else if (shown_v.isBool() && reason == "not_allowed") {
+    result = "not_allowed";
+    text = path + " is outside the folders the user allows for agents. Ask the user to add its folder in "
+                   "lumos-md: Tools -> MCP Allowed Folders.";
   } else if (shown_v.isBool() && reason == "not_file") {
     result = "not_file";
     text = path + " does not exist or is not a file.";
+  } else if (shown_v.isBool() && reason == "unsupported_type") {
+    result = "unsupported_type";
+    text = "lumos-md shows only files named " + text_file_patterns() + " (a link: its target's name).";
   } else if (shown_v.isBool() && reason == "cannot_open") {
     result = "cannot_open";
-    text = "lumos-md cannot open " + name + ": " + answer->value("detail").toString();
+    text = "lumos-md cannot open " + name + ": " + reply.value("detail").toString();
+  } else if (shown_v.isBool()) {
+    result = "refused";
+    text = "lumos-md refused: " + reason + ".";
   }
   lumos::log(lumos::LogLevel::debug, kComp, "bridge_call", {{"tool", "show"}, {"result", result}});
   return tool_result(text, std::string_view(result) != "ok");
@@ -284,9 +296,11 @@ int run_mcp_bridge(const QString& server_name) {
     if (line.endsWith('\r')) line.chop(1);
     const QByteArray answer = handle_mcp_line(line, ask);
     if (!answer.isEmpty()) {
-      std::fwrite(answer.constData(), 1, static_cast<size_t>(answer.size()), stdout);
-      std::fputc('\n', stdout);
-      std::fflush(stdout);
+      const auto size = static_cast<size_t>(answer.size());
+      if (std::fwrite(answer.constData(), 1, size, stdout) != size || std::fputc('\n', stdout) == EOF ||
+          std::fflush(stdout) != 0) {
+        return 1;
+      }
     }
   }
   return 0;

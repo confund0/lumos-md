@@ -25,9 +25,10 @@ install(FILES ${LUMOS_MD_HELP_BUILD}/about.md ${LUMOS_MD_HELP_BUILD}/features.md
 
 if(LUMOS_BUILD_TESTS AND TARGET Catch2::Catch2WithMain)
   add_executable(lumos_app_tests tests/test_app_log.cpp tests/test_drafts.cpp tests/test_file_watch.cpp
-                 tests/test_line_merge.cpp tests/test_link_open.cpp tests/test_mcp_bridge.cpp tests/test_open_tabs.cpp
-                 tests/test_recent_files.cpp app_log.cpp drafts.cpp file_watch.cpp line_merge.cpp link_open.cpp
-                 mcp_bridge.cpp open_tabs.cpp recent_files.cpp)
+                 tests/test_line_merge.cpp tests/test_link_open.cpp tests/test_mcp_access.cpp
+                 tests/test_mcp_bridge.cpp tests/test_open_tabs.cpp tests/test_recent_files.cpp app_log.cpp
+                 drafts.cpp file_watch.cpp line_merge.cpp link_open.cpp mcp_bridge.cpp open_tabs.cpp
+                 recent_files.cpp)
   target_include_directories(lumos_app_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(lumos_app_tests PRIVATE lumos::core Qt6::Core Qt6::Network Catch2::Catch2WithMain)
   target_compile_definitions(lumos_app_tests PRIVATE LUMOS_MD_VERSION="${PROJECT_VERSION}")

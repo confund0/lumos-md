@@ -1621,7 +1621,7 @@ std::optional<CommandResult> set_heading(const Document& doc, Selection sel, int
 
   if (edits.empty()) return CommandResult{{}, sel};
   BlockDraft draft{std::move(edits), sel, std::nullopt, std::nullopt, std::nullopt};
-  if (from_line) {
+  if (from_line && to_line) {
     draft.blank_before = blank_before_at(doc, *from_line, contexts_at_line(doc, *from_line));
     draft.blank_after = blank_after_at(doc, *to_line, contexts_at_line(doc, *to_line));
   }
@@ -1713,9 +1713,10 @@ std::optional<CommandResult> list_on(const Document& doc, Selection sel, bool or
       }
     }
     last_new = l;
-    std::string mark = (ordered ? num(number++) + "." : std::string(1, bullet)) + " ";
+    std::string mark = ordered ? num(number++) + "." : std::string(1, bullet);
+    mark += ' ';
     mark_width = mark.size();
-    if (lone_blank) mark = blank_line_pad(doc, l) + mark;
+    if (lone_blank) mark.insert(0, blank_line_pad(doc, l));
     edits.push_back(Edit{bl.lt.start + std::min(bl.col, bl.lt.text.size()), 0, std::move(mark)});
   }
 
@@ -2169,6 +2170,7 @@ std::optional<CommandResult> renumber_lists(const Document& doc, const ListShape
   const LineRange r = line_range(doc.buffer(), from, to);
   const std::vector<NodeId> items = items_in(tree, r);
   std::vector<ListShape::Item> now;
+  now.reserve(items.size());
   for (NodeId item : items) now.push_back({list_depth(tree, item), tree[tree[item].parent].ordered});
   const bool digits = std::any_of(items.begin(), items.end(), [&](NodeId item) {
     return tree[tree[item].parent].ordered && marker_edited(tree, item, from, to);

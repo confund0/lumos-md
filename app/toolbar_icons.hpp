@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QColor>
 #include <QIcon>
 
 enum class ToolIcon {
@@ -23,6 +24,13 @@ enum class ToolIcon {
   code_block,
   table,
   format_table,
+  paragraph,
+  caret,
+  words,
+  document,
+  zoom,
+  mcp,
 };
 
 QIcon toolbar_icon(ToolIcon kind);
+QIcon toolbar_icon(ToolIcon kind, const QColor& color);

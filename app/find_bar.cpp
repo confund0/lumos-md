@@ -15,13 +15,14 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <cmath>
 
 #include "lumos/qt/source_editor.hpp"
 
 namespace {
 
 QColor mix(const QColor& a, const QColor& b, double t) {
-  auto ch = [t](int x, int y) { return static_cast<int>(x + (y - x) * t + 0.5); };
+  auto ch = [t](int x, int y) { return static_cast<int>(std::lround(x + (y - x) * t)); };
   return QColor(ch(a.red(), b.red()), ch(a.green(), b.green()), ch(a.blue(), b.blue()));
 }
 
@@ -187,7 +188,7 @@ void FindBar::do_replace_all() {
   const auto result = lumos::replace_all(editor_->document(), pattern, replacement, options());
   const bool applied = editor_->apply_command(result.command);
   recompute_matches();
-  if (applied) replaced_ = result.command->edits.size();
+  if (applied && result.command) replaced_ = result.command->edits.size();
   current_ = nearest(editor_->selection().cursor,  true,  true);
   update_marks();
   update_count_label();

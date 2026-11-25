@@ -9,17 +9,19 @@ edit, and one Undo takes it back.
 - Files open in tabs of one window. A second start of lumos-md opens
   its files in the running window.
 - The tabs of the last session open at the next start.
-- File, Reopen closed tab (Ctrl+Shift+T) opens the last closed files
+- File -> Reopen closed tab (Ctrl+Shift+T) opens the last closed files
   again.
-- File, Open Recent lists the last files.
+- File -> Open Recent lists the last files.
+- The status bar shows the full path of the current tab. A right click
+  on a tab offers Copy Path.
 - A few seconds after an edit, the unsaved text goes to a draft file.
   After a crash, the next start offers to recover it.
 - When an open file changes on disk, lumos-md loads it again as one
   undo step. A tab with unsaved changes asks first, and Show diff shows
   both texts side by side to merge them.
 - A file without write access opens for edits; Save then opens Save As.
-- Edit, Read-only stops all edits in the current tab.
-- File, Properties counts bytes, characters, words, lines, headings,
+- Edit -> Read-only stops all edits in the current tab.
+- File -> Properties counts bytes, characters, words, lines, headings,
   links, pictures, tables and tasks.
 
 ## Editing
@@ -36,11 +38,11 @@ edit, and one Undo takes it back.
   command turns the format on or off.
 - Insert: link (Ctrl+K), picture, horizontal line, code block, table.
 - Tables: Tab and Shift+Tab go to the next or previous cell, Enter to
-  the next row. The last cell gets a new row. Table, Format table lines
+  the next row. The last cell gets a new row. Table -> Format table lines
   up the columns.
 - Right click, Make it text: Markdown characters in the selection stay
   as plain text.
-- Edit, Paste from HTML (Ctrl+Alt+V) pastes a copy from a web page as
+- Edit -> Paste from HTML (Ctrl+Alt+V) pastes a copy from a web page as
   Markdown.
 - Drag and drop of text inside the editor and from or to other apps.
   Middle click pastes the selected text (Linux).
@@ -48,13 +50,13 @@ edit, and one Undo takes it back.
 
 ## Find and replace
 
-- Edit, Find (Ctrl+F) and Replace (Ctrl+H): plain text or a regular
+- Edit -> Find (Ctrl+F) and Replace (Ctrl+H): plain text or a regular
   expression, case-sensitive or not, whole words.
 - Replace All is one undo step.
 
 ## View
 
-- View, Show Preview shows the current tab as HTML next to the editor.
+- View -> Show Preview shows the current tab as HTML next to the editor.
   It follows the text and the scroll position. A click on a link opens
   it.
 - Pictures show below their Markdown image line.
@@ -65,9 +67,10 @@ edit, and one Undo takes it back.
 
 ## AI agents
 
-With Tools, Enable MCP Server on, an AI agent can list and read the open
+With Tools -> Enable MCP Server on, an AI agent can list and read the open
 files with their unsaved changes, and show you a file or a line in it.
-See Help, MCP Server.
+It gets only files in the folders of Tools -> MCP Allowed Folders, and it
+shows only `*.md`, `*.markdown` and `*.txt` files. See Help -> MCP Server.
 
 ## Not supported
 

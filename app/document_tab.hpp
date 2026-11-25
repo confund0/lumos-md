@@ -3,6 +3,7 @@
 #include <QByteArray>
 #include <QLockFile>
 #include <QString>
+#include <QStringList>
 #include <QWidget>
 
 #include <functional>
@@ -34,6 +35,7 @@ class DocumentTab : public QWidget {
   void set_buffer_id(quint64 id) { buffer_id_ = id; }
 
   const QString& path() const { return path_; }
+  const QStringList& text_sources() const { return text_sources_; }
   const QByteArray& saved_sha256() const { return saved_sha256_; }
   const QByteArray& base() const { return base_; }
   const QByteArray& kept_sha256() const { return kept_sha256_; }
@@ -76,6 +78,7 @@ class DocumentTab : public QWidget {
   FindBar* find_bar_ = nullptr;
   quint64 buffer_id_ = 0;
   QString path_;
+  QStringList text_sources_;
   std::function<void(const QString&)> link_open_failed_;
 
   QString drafts_dir_;

@@ -12,7 +12,7 @@
 
 namespace {
 constexpr std::string_view kComp = "app";
-constexpr qint64 kMaxMessageBytes = 1024 * 1024;
+constexpr qint64 kMaxMessageBytes = qint64{1024} * 1024;
 constexpr int kMessageTimeoutMs = 5000;
 constexpr qsizetype kMaxTokenBytes = 4096;
 constexpr char kHeader[] = "lumos-md-open 2";
@@ -30,7 +30,7 @@ bool token_ok(const QByteArray& token) {
 QString instance_server_name(const QString& state_dir, const QString& runtime_dir, const QString& prefix) {
   const QString cleaned = QDir::cleanPath(QDir(state_dir).absolutePath());
   const QByteArray hash = QCryptographicHash::hash(cleaned.toUtf8(), QCryptographicHash::Sha256);
-  const QString name = prefix + QString::fromLatin1(hash.toHex().left(16));
+  QString name = prefix + QString::fromLatin1(hash.toHex().left(16));
   if (!runtime_dir.isEmpty() && QDir(runtime_dir).exists()) return QDir(runtime_dir).filePath(name);
   return name;
 }

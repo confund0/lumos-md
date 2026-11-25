@@ -11,17 +11,20 @@
 #include <QStringDecoder>
 #include <QTimer>
 
+#include <algorithm>
 #include <cmath>
 #include <string>
 
 #include "document_tab.hpp"
+#include "file_types.hpp"
+#include "mcp_access.hpp"
 #include "lumos/log.hpp"
 #include "lumos/qt/source_editor.hpp"
 #include "main_window.hpp"
 
 namespace {
 constexpr std::string_view kComp = "mcp";
-constexpr qsizetype kMaxLineBytes = 64 * 1024;
+constexpr qsizetype kMaxLineBytes = qsizetype{64} * 1024;
 constexpr int kRequestTimeoutMs = 5000;
 
 QByteArray to_line(const QJsonObject& object) { return QJsonDocument(object).toJson(QJsonDocument::Compact); }
@@ -34,23 +37,44 @@ bool is_valid_line(const QJsonValue& v) {
   return d == std::floor(d) && d >= 1 && d <= 2147483647.0;
 }
 
-QJsonObject list_answer(const MainWindow& window, qsizetype& file_count) {
+bool buffer_allowed(const BufferInfo& buffer, const QStringList& folders) {
+  if (buffer.path.isEmpty() || !mcp_path_allowed(mcp_path_key(buffer.path), folders)) return false;
+  return std::all_of(buffer.sources.begin(), buffer.sources.end(),
+                     [&](const QString& source) { return mcp_path_allowed(source, folders); });
+}
+
+QJsonObject list_answer(const MainWindow& window, qsizetype& file_count, qsizetype& hidden_count) {
+  const QStringList folders = window.mcp_effective_folders();
   QJsonArray files;
+  qsizetype hidden = 0;
   for (const BufferInfo& buffer : window.list_buffers()) {
-    files.append(QJsonObject{{"path", buffer.path.isEmpty() ? QJsonValue() : QJsonValue(buffer.path)},
+    if (!buffer_allowed(buffer, folders)) {
+      ++hidden;
+      continue;
+    }
+    files.append(QJsonObject{{"path", buffer.path},
                               {"name", buffer.name},
                               {"modified", buffer.modified},
                               {"current", buffer.current}});
   }
   file_count = files.size();
+  hidden_count = hidden;
   return QJsonObject{{"files", files}};
 }
 
 QJsonObject read_answer(const MainWindow& window, const QString& path, std::string_view& result, qsizetype& size) {
   const std::optional<quint64> id = window.find_buffer(path);
   const std::optional<QByteArray> bytes = id ? window.read_buffer(*id) : std::nullopt;
-  if (!bytes) {
+  if (!id || !bytes) {
     result = "not_open";
+    return QJsonObject{{"open", false}};
+  }
+  const quint64 found = *id;
+  const QList<BufferInfo> buffers = window.list_buffers();
+  const auto buffer =
+      std::find_if(buffers.begin(), buffers.end(), [found](const BufferInfo& b) { return b.id == found; });
+  if (buffer == buffers.end() || !buffer_allowed(*buffer, window.mcp_effective_folders())) {
+    result = "not_allowed";
     return QJsonObject{{"open", false}};
   }
   QStringDecoder decoder(QStringDecoder::Utf8);
@@ -70,12 +94,22 @@ QJsonObject show_answer(MainWindow& window, const QString& path, std::string_vie
     result = "busy";
     return QJsonObject{{"shown", false}, {"reason", "busy"}};
   }
-  if (!window.find_buffer(path) && !QFileInfo(path).isFile()) {
+  const QString target = QFileInfo(path).canonicalFilePath();
+  const QString checked = target.isEmpty() ? path : target;
+  if (!mcp_path_allowed(checked, window.mcp_effective_folders())) {
+    result = "not_allowed";
+    return QJsonObject{{"shown", false}, {"reason", "not_allowed"}};
+  }
+  if (target.isEmpty() ? !window.find_buffer(path) : !QFileInfo(target).isFile()) {
     result = "not_file";
     return QJsonObject{{"shown", false}, {"reason", "not_file"}};
   }
+  if (!is_text_file_name(checked)) {
+    result = "unsupported_type";
+    return QJsonObject{{"shown", false}, {"reason", "unsupported_type"}};
+  }
   QString error;
-  if (!window.open_buffer(path, &error)) {
+  if (!window.open_buffer(checked, &error)) {
     result = "cannot_open";
     return QJsonObject{{"shown", false}, {"reason", "cannot_open"}, {"detail", error}};
   }
@@ -104,9 +138,13 @@ QByteArray answer_window_request(const QByteArray& line, MainWindow& window) {
 
   if (envelope_ok && op == QStringLiteral("list")) {
     qsizetype file_count = 0;
-    const QJsonObject answer = list_answer(window, file_count);
+    qsizetype hidden_count = 0;
+    const QJsonObject answer = list_answer(window, file_count, hidden_count);
     lumos::log(lumos::LogLevel::debug, kComp, "server_request",
-               {{"op", "list"}, {"result", "ok"}, {"files", std::to_string(file_count)}});
+               {{"op", "list"},
+                {"result", "ok"},
+                {"files", std::to_string(file_count)},
+                {"hidden", std::to_string(hidden_count)}});
     return to_line(answer);
   }
   if (envelope_ok && op == QStringLiteral("read")) {

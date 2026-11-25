@@ -52,6 +52,13 @@ std::size_t transform(std::size_t pos, const Edit& e) {
   return e.offset;
 }
 
+std::optional<ByteRange> move_range(ByteRange r, const Edit& e) {
+  if (e.offset + e.removed <= r.start)
+    return ByteRange{r.start - e.removed + e.inserted.size(), r.end - e.removed + e.inserted.size()};
+  if (e.offset >= r.end) return r;
+  return std::nullopt;
+}
+
 std::vector<std::pair<std::size_t, std::size_t>> touched_ranges(const Change& change) {
   std::vector<std::pair<std::size_t, std::size_t>> out;
   const auto map_through = [](std::pair<std::size_t, std::size_t>& r, const TextRegion& g) {
@@ -183,6 +190,11 @@ void SourceEditor::replace_text(std::string_view text) {
   } catch (const std::exception& ex) {
     log(LogLevel::debug, kComp, "edit_failed",
         {{"offset", num(e.offset)}, {"removed", num(e.removed)}, {"reason", ex.what()}});
+    modified_ = false;
+    set_text(std::string(text), true);
+    doc_.mark_unsaved();
+    emit textChanged();
+    check_modified();
     return;
   }
   desired_x_ = -1;
@@ -238,6 +250,11 @@ void SourceEditor::on_change(const Change& change) {
   QElapsedTimer timer;
   timer.start();
   move_marks(change);
+  if (change.kind == ChangeKind::load) drag_source_.reset();
+  for (const Edit& e : change.edits) {
+    if (!drag_source_) break;
+    drag_source_ = move_range(*drag_source_, e);
+  }
   if (preedit_line_ < lines_.size()) lines_[preedit_line_].layout.reset();
   preedit_line_ = SIZE_MAX;
   for (const Edit& e : change.edits) {
@@ -295,14 +312,12 @@ void SourceEditor::move_marks(const Change& change) {
     std::vector<ByteRange> kept;
     kept.reserve(m.ranges.size());
     for (ByteRange r : m.ranges) {
-      bool touched = false;
+      std::optional<ByteRange> moved = r;
       for (const Edit& e : change.edits) {
-        if (e.offset < r.end && r.start < e.offset + e.removed) touched = true;
-        if (e.removed == 0 && r.start < e.offset && e.offset < r.end) touched = true;
-        if (touched) break;
-        r = {transform(r.start, e), transform(r.end, e)};
+        moved = move_range(*moved, e);
+        if (!moved) break;
       }
-      if (!touched) kept.push_back(r);
+      if (moved) kept.push_back(*moved);
     }
     m.ranges = std::move(kept);
   }
@@ -400,7 +415,12 @@ void SourceEditor::update_lines(const TextRegion& region) {
   lines_.insert(lines_.begin() + static_cast<std::ptrdiff_t>(first), std::make_move_iterator(fresh.begin()),
                 std::make_move_iterator(fresh.end()));
   for (std::size_t i = after; i < lines_.size(); ++i) {
-    lines_[i].span.start = lines_[i].span.start - region.old_end + region.new_end;
+    Line& l = lines_[i];
+    l.span.start = l.span.start - region.old_end + region.new_end;
+    for (LineImage& img : l.images) {
+      img.start = img.start - region.old_end + region.new_end;
+      img.end = img.end - region.old_end + region.new_end;
+    }
   }
   layout_dirty_ = true;
 }
@@ -497,7 +517,8 @@ void SourceEditor::restyle(std::size_t first, std::size_t last) {
   auto same_images = [](const std::vector<LineImage>& a, const std::vector<LineImage>& b) {
     if (a.size() != b.size()) return false;
     for (std::size_t i = 0; i < a.size(); ++i)
-      if (a[i].url != b[i].url || a[i].start != b[i].start || a[i].end != b[i].end || a[i].alt != b[i].alt)
+      if (a[i].url != b[i].url || a[i].start != b[i].start || a[i].end != b[i].end || a[i].alt != b[i].alt ||
+          a[i].reference != b[i].reference)
         return false;
     return true;
   };
@@ -1124,7 +1145,7 @@ Selection SourceEditor::renumber(const ListShape& before, std::size_t from, std:
   return r->selection;
 }
 
-void SourceEditor::type_text(std::string text) {
+void SourceEditor::type_text(const std::string& text) {
   if (text.empty()) return;
   const bool space = is_space_text(text);
   const bool sel = has_selection();
@@ -1174,9 +1195,11 @@ bool SourceEditor::apply_command(const std::optional<CommandResult>& result) {
     }
     doc_.begin();
     bool failed = false;
+    bool applied = false;
     for (const Edit& e : edits) {
       try {
         doc_.apply(e);
+        applied = true;
       } catch (const std::exception& ex) {
         log(LogLevel::debug, kComp, "edit_failed",
             {{"offset", num(e.offset)}, {"removed", num(e.removed)}, {"reason", ex.what()}});
@@ -1194,7 +1217,7 @@ bool SourceEditor::apply_command(const std::optional<CommandResult>& result) {
     }
     doc_.commit();
     if (failed) {
-      if (doc_.can_undo()) doc_.undo();
+      if (applied && doc_.can_undo()) doc_.undo();
       check_undo_state();
       return true;
     }
@@ -1423,14 +1446,14 @@ void SourceEditor::inputMethodEvent(QInputMethodEvent* e) {
       const Line& l = lines_[line_index(cursor_)];
       const int c = to_utf16(l, cursor_);
       const int a = std::clamp(c + e->replacementStart(), 0, l.map.size());
-      const int b = std::clamp(a + e->replacementLength(), 0, l.map.size());
+      const int b = std::clamp(c + e->replacementStart() + e->replacementLength(), a, l.map.size());
       if (debug_on()) log(LogLevel::debug, kComp, "ime_replace", {{"start", num(static_cast<std::size_t>(a))}});
       close_group();
       replace(l.span.start + l.map.to_utf8(a), l.span.start + l.map.to_utf8(b), commit);
       ensure_cursor_visible();
       emit cursorPositionChanged();
     } else {
-      type_text(std::move(commit));
+      type_text(commit);
     }
   }
   preedit_ = e->preeditString();

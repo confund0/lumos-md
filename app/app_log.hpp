@@ -3,7 +3,7 @@
 #include <QString>
 #include <QtGlobal>
 
-inline constexpr qint64 kLogMaxBytes = 1024 * 1024;
+inline constexpr qint64 kLogMaxBytes = qint64{1024} * 1024;
 
 struct LogOptions {
   QString path;

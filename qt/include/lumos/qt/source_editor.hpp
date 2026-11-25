@@ -197,7 +197,7 @@ class SourceEditor : public QAbstractScrollArea {
   void ensure_cursor_visible();
   void replace(std::size_t from, std::size_t to, std::string_view text);
   Selection renumber(const ListShape& before, std::size_t from, std::size_t to, Selection sel);
-  void type_text(std::string text);
+  void type_text(const std::string& text);
   void delete_range(std::size_t from, std::size_t to, Group group);
   void begin_group(Group group);
   void close_group();

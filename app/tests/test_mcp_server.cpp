@@ -7,6 +7,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLabel>
 #include <QLocalSocket>
 #include <QProcess>
 #include <QProcessEnvironment>
@@ -107,6 +108,8 @@ QJsonObject show(const QString& name, const QString& path) {
 
 QAction* mcp_action(MainWindow& window) { return window.findChild<QAction*>(QStringLiteral("mcp_enabled")); }
 
+void allow_mcp_folder(MainWindow& window, const QString& folder) { window.set_mcp_allowed_folders({folder}); }
+
 QTabWidget* tab_widget(MainWindow& window) { return window.tabs_for_tests(); }
 
 QAction* named_action(MainWindow& window, const char* name) {
@@ -151,6 +154,7 @@ class TestMcpServer : public QObject {
   void end_to_end_with_mcp_dir();
   void show_opens_or_picks_the_tab();
   void show_errors();
+  void show_refuses_other_file_types();
   void show_unreadable_file();
   void show_answers_before_draft_offer();
   void show_with_line_moves_the_cursor();
@@ -158,6 +162,13 @@ class TestMcpServer : public QObject {
   void show_with_a_bad_line_gives_bad_request();
   void show_with_line_on_a_new_tab_waits_for_its_size();
   void show_without_line_leaves_the_cursor();
+  void list_and_read_hide_files_outside_folder();
+  void show_outside_folder_and_missing_give_not_allowed();
+  void read_after_folder_replaced_by_link_gives_not_open();
+  void read_after_reload_through_link_gives_not_open();
+  void empty_allowed_folders_blocks_list_and_show();
+  void set_allowed_folders_refuses_protected_dir();
+  void mcp_status_section();
 };
 
 void TestMcpServer::switch_off_by_default() {
@@ -208,6 +219,7 @@ void TestMcpServer::list_gives_files_in_tab_order() {
   const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
   window.set_mcp_server_name(name);
   mcp_action(window)->setChecked(true);
+  allow_mcp_folder(window, work_dir.path());
 
   QVERIFY(window.open_file(a));
   QVERIFY(window.open_file(b));
@@ -221,9 +233,7 @@ void TestMcpServer::list_gives_files_in_tab_order() {
       {"files", QJsonArray{QJsonObject{{"path", a}, {"name", QStringLiteral("a.md")}, {"modified", true},
                                         {"current", false}},
                             QJsonObject{{"path", b}, {"name", QStringLiteral("b.md")}, {"modified", false},
-                                        {"current", true}},
-                            QJsonObject{{"path", QJsonValue()}, {"name", QStringLiteral("Untitled")},
-                                        {"modified", false}, {"current", false}}}}};
+                                        {"current", true}}}}};
   QCOMPARE(*answer, expected);
 }
 
@@ -240,6 +250,7 @@ void TestMcpServer::read_gives_tab_text() {
   const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
   window.set_mcp_server_name(name);
   mcp_action(window)->setChecked(true);
+  allow_mcp_folder(window, work_dir.path());
 
   QVERIFY(window.open_file(a));
   window.current_tab()->editor()->insert_text("x");
@@ -276,6 +287,7 @@ void TestMcpServer::read_non_utf8_gives_utf8_false() {
   const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
   window.set_mcp_server_name(name);
   mcp_action(window)->setChecked(true);
+  allow_mcp_folder(window, work_dir.path());
   QVERIFY(window.open_file(bad));
 
   const auto answer = ask(name, QJsonObject{{"v", 1}, {"op", "read"}, {"path", bad}});
@@ -320,6 +332,7 @@ void TestMcpServer::read_large_text_exact() {
   const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
   window.set_mcp_server_name(name);
   mcp_action(window)->setChecked(true);
+  allow_mcp_folder(window, work_dir.path());
   QVERIFY(window.open_file(path));
 
   const auto answer = ask(name, QJsonObject{{"v", 1}, {"op", "read"}, {"path", path}}, 2000, 10000);
@@ -368,6 +381,7 @@ void TestMcpServer::end_to_end_through_mcp_bridge() {
   MainWindow window(QDir(config_dir.path()).filePath(QStringLiteral("window-settings.ini")));
   window.set_mcp_server_name(name);
   mcp_action(window)->setChecked(true);
+  allow_mcp_folder(window, home_dir.path());
   QVERIFY(window.mcp_listening());
   QVERIFY(window.open_file(file));
 
@@ -539,6 +553,7 @@ void TestMcpServer::show_opens_or_picks_the_tab() {
   const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
   window.set_mcp_server_name(name);
   mcp_action(window)->setChecked(true);
+  allow_mcp_folder(window, work_dir.path());
   QCOMPARE(tab_widget(window)->count(), 1);
 
   const QJsonObject shown{{"shown", true}};
@@ -573,6 +588,7 @@ void TestMcpServer::show_errors() {
   const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
   window.set_mcp_server_name(name);
   mcp_action(window)->setChecked(true);
+  allow_mcp_folder(window, work_dir.path());
 
   const QJsonObject not_file{{"shown", false}, {"reason", "not_file"}};
   QCOMPARE(show(name, dir.filePath(QStringLiteral("missing.md"))),
@@ -598,6 +614,47 @@ void TestMcpServer::show_errors() {
   QVERIFY(window.current_tab()->path().isEmpty());
 }
 
+void TestMcpServer::show_refuses_other_file_types() {
+  QTemporaryDir settings_dir;
+  QTemporaryDir work_dir;
+  QTemporaryDir socket_dir;
+  QDir dir(work_dir.path());
+  const QString a = write_file(dir, QStringLiteral("a.md"), QStringLiteral("# A\n"));
+  const QString upper = write_file(dir, QStringLiteral("B.MARKDOWN"), QStringLiteral("# B\n"));
+  const QString key = write_file(dir, QStringLiteral("key"), QStringLiteral("secret\n"));
+  const QString conf = write_file(dir, QStringLiteral("c.conf"), QStringLiteral("secret\n"));
+  const QString key_link = dir.filePath(QStringLiteral("key.md"));
+  QVERIFY(QFile::link(key, key_link));
+  const QString a_link = dir.filePath(QStringLiteral("a-link.txt"));
+  QVERIFY(QFile::link(a, a_link));
+
+  MainWindow window(QDir(settings_dir.path()).filePath(QStringLiteral("settings.ini")));
+  const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
+  window.set_mcp_server_name(name);
+  mcp_action(window)->setChecked(true);
+  allow_mcp_folder(window, work_dir.path());
+
+  const QJsonObject refused{{"shown", false}, {"reason", "unsupported_type"}};
+  QCOMPARE(show(name, key), refused);
+  QCOMPARE(show(name, conf), refused);
+  QCOMPARE(show(name, key_link), refused);
+  QCOMPARE(tab_widget(window)->count(), 1);
+  QVERIFY(window.current_tab()->path().isEmpty());
+
+  const QJsonObject shown{{"shown", true}};
+  QCOMPARE(show(name, upper), shown);
+  QCOMPARE(QFileInfo(window.current_tab()->path()).fileName(), QStringLiteral("B.MARKDOWN"));
+  QCOMPARE(show(name, a_link), shown);
+  QCOMPARE(QFileInfo(window.current_tab()->path()).fileName(), QStringLiteral("a.md"));
+  QCOMPARE(tab_widget(window)->count(), 2);
+
+  QVERIFY(window.open_file(conf));
+  QCOMPARE(tab_widget(window)->count(), 3);
+  QCOMPARE(show(name, a), shown);
+  QCOMPARE(show(name, conf), refused);
+  QCOMPARE(QFileInfo(window.current_tab()->path()).fileName(), QStringLiteral("a.md"));
+}
+
 void TestMcpServer::show_unreadable_file() {
   if (!file_modes_apply()) QSKIP("file modes do not apply (root)");
   QTemporaryDir settings_dir;
@@ -610,6 +667,7 @@ void TestMcpServer::show_unreadable_file() {
   const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
   window.set_mcp_server_name(name);
   mcp_action(window)->setChecked(true);
+  allow_mcp_folder(window, work_dir.path());
 
   const auto answer = ask(name, QJsonObject{{"v", 1}, {"op", "show"}, {"path", a}});
   QVERIFY(answer.has_value());
@@ -625,7 +683,9 @@ void TestMcpServer::show_answers_before_draft_offer() {
   QVERIFY(dir.isValid());
   const QDir d(dir.path());
   const QString drafts_dir = d.filePath(QStringLiteral("drafts"));
-  const QString path = write_file(d, QStringLiteral("a.md"), QStringLiteral("# A\n"));
+  QVERIFY(d.mkdir(QStringLiteral("work")));
+  const QDir work(d.filePath(QStringLiteral("work")));
+  const QString path = write_file(work, QStringLiteral("a.md"), QStringLiteral("# A\n"));
   const Draft draft{.untitled = false, .path = path, .saved_sha256 = sha256_hex(QByteArray("# A\n")),
                     .text = QByteArray("# A\ndraft text")};
   QVERIFY(write_draft(drafts_dir, path_draft_id(path), draft));
@@ -634,6 +694,7 @@ void TestMcpServer::show_answers_before_draft_offer() {
   const QString name = d.filePath(QStringLiteral("mcp"));
   window.set_mcp_server_name(name);
   mcp_action(window)->setChecked(true);
+  allow_mcp_folder(window, work.path());
 
   std::atomic<bool> answered{false};
   bool answered_while_box_open = false;
@@ -678,6 +739,7 @@ void TestMcpServer::show_with_line_moves_the_cursor() {
   const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
   window.set_mcp_server_name(name);
   mcp_action(window)->setChecked(true);
+  allow_mcp_folder(window, work_dir.path());
 
   const auto answer = ask(name, QJsonObject{{"v", 1}, {"op", "show"}, {"path", a}, {"line", 3}});
   QVERIFY(answer.has_value());
@@ -695,6 +757,7 @@ void TestMcpServer::show_with_line_past_the_end_gives_the_last_line() {
   const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
   window.set_mcp_server_name(name);
   mcp_action(window)->setChecked(true);
+  allow_mcp_folder(window, work_dir.path());
 
   const auto answer = ask(name, QJsonObject{{"v", 1}, {"op", "show"}, {"path", a}, {"line", 100}});
   QVERIFY(answer.has_value());
@@ -741,6 +804,7 @@ void TestMcpServer::show_with_line_on_a_new_tab_waits_for_its_size() {
   const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
   window.set_mcp_server_name(name);
   mcp_action(window)->setChecked(true);
+  allow_mcp_folder(window, work_dir.path());
   window.resize(900, 400);
   window.show();
   QVERIFY(QTest::qWaitForWindowExposed(&window));
@@ -772,11 +836,216 @@ void TestMcpServer::show_without_line_leaves_the_cursor() {
   const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
   window.set_mcp_server_name(name);
   mcp_action(window)->setChecked(true);
+  allow_mcp_folder(window, work_dir.path());
 
   QCOMPARE(show(name, a), (QJsonObject{{"shown", true}}));
   window.current_tab()->editor()->set_cursor_position(9);
   QCOMPARE(show(name, a), (QJsonObject{{"shown", true}}));
   QCOMPARE(window.current_tab()->editor()->cursor_position(), std::size_t(9));
+}
+
+void TestMcpServer::list_and_read_hide_files_outside_folder() {
+  QTemporaryDir settings_dir;
+  QTemporaryDir work_dir;
+  QTemporaryDir socket_dir;
+  QDir dir(work_dir.path());
+  QVERIFY(dir.mkdir(QStringLiteral("allowed")));
+  QVERIFY(dir.mkdir(QStringLiteral("outside")));
+  const QString inside =
+      write_file(QDir(dir.filePath(QStringLiteral("allowed"))), QStringLiteral("a.md"), QStringLiteral("# A\n"));
+  const QString outside =
+      write_file(QDir(dir.filePath(QStringLiteral("outside"))), QStringLiteral("b.md"), QStringLiteral("# B\n"));
+
+  MainWindow window(QDir(settings_dir.path()).filePath(QStringLiteral("settings.ini")));
+  const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
+  window.set_mcp_server_name(name);
+  mcp_action(window)->setChecked(true);
+  allow_mcp_folder(window, dir.filePath(QStringLiteral("allowed")));
+
+  QVERIFY(window.open_file(inside));
+  QVERIFY(window.open_file(outside));
+  window.new_tab();
+
+  const auto answer = ask(name, QJsonObject{{"v", 1}, {"op", "list"}});
+  QVERIFY(answer.has_value());
+  const QJsonObject expected{{"files", QJsonArray{QJsonObject{{"path", inside},
+                                                                {"name", QStringLiteral("a.md")},
+                                                                {"modified", false},
+                                                                {"current", false}}}}};
+  QCOMPARE(*answer, expected);
+
+  const auto read = ask(name, QJsonObject{{"v", 1}, {"op", "read"}, {"path", outside}});
+  QVERIFY(read.has_value());
+  QCOMPARE(*read, (QJsonObject{{"open", false}}));
+}
+
+void TestMcpServer::show_outside_folder_and_missing_give_not_allowed() {
+  QTemporaryDir settings_dir;
+  QTemporaryDir work_dir;
+  QTemporaryDir socket_dir;
+  QDir dir(work_dir.path());
+  QVERIFY(dir.mkdir(QStringLiteral("allowed")));
+  QVERIFY(dir.mkdir(QStringLiteral("outside")));
+  const QDir allowed_dir(dir.filePath(QStringLiteral("allowed")));
+  const QDir outside_dir(dir.filePath(QStringLiteral("outside")));
+  const QString outside_file = write_file(outside_dir, QStringLiteral("b.md"), QStringLiteral("# B\n"));
+  const QString missing = outside_dir.filePath(QStringLiteral("missing.md"));
+  const QString link = allowed_dir.filePath(QStringLiteral("link.md"));
+  QVERIFY(QFile::link(outside_file, link));
+
+  MainWindow window(QDir(settings_dir.path()).filePath(QStringLiteral("settings.ini")));
+  const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
+  window.set_mcp_server_name(name);
+  mcp_action(window)->setChecked(true);
+  allow_mcp_folder(window, allowed_dir.path());
+
+  const QJsonObject not_allowed{{"shown", false}, {"reason", "not_allowed"}};
+  QCOMPARE(show(name, outside_file), not_allowed);
+  QCOMPARE(show(name, missing), not_allowed);
+  QCOMPARE(show(name, link), not_allowed);
+  QCOMPARE(tab_widget(window)->count(), 1);
+  QVERIFY(window.current_tab()->path().isEmpty());
+}
+
+void TestMcpServer::read_after_folder_replaced_by_link_gives_not_open() {
+  QTemporaryDir settings_dir;
+  QTemporaryDir work_dir;
+  QTemporaryDir socket_dir;
+  QDir dir(work_dir.path());
+  QVERIFY(dir.mkdir(QStringLiteral("real")));
+  QVERIFY(dir.mkdir(QStringLiteral("outside")));
+  const QString real_dir = dir.filePath(QStringLiteral("real"));
+  const QString outside_dir = dir.filePath(QStringLiteral("outside"));
+  const QString path = write_file(QDir(real_dir), QStringLiteral("a.md"), QStringLiteral("# A\n"));
+  write_file(QDir(outside_dir), QStringLiteral("a.md"), QStringLiteral("# other A\n"));
+
+  MainWindow window(QDir(settings_dir.path()).filePath(QStringLiteral("settings.ini")));
+  const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
+  window.set_mcp_server_name(name);
+  mcp_action(window)->setChecked(true);
+  allow_mcp_folder(window, real_dir);
+  QVERIFY(window.open_file(path));
+
+  const QString moved = dir.filePath(QStringLiteral("real_moved"));
+  QVERIFY(QDir().rename(real_dir, moved));
+  QVERIFY(QFile::link(outside_dir, real_dir));
+
+  const auto answer = ask(name, QJsonObject{{"v", 1}, {"op", "read"}, {"path", path}});
+  QVERIFY(answer.has_value());
+  QCOMPARE(*answer, (QJsonObject{{"open", false}}));
+}
+
+void TestMcpServer::read_after_reload_through_link_gives_not_open() {
+  QTemporaryDir settings_dir;
+  QTemporaryDir work_dir;
+  QTemporaryDir socket_dir;
+  QDir dir(work_dir.path());
+  QVERIFY(dir.mkdir(QStringLiteral("allowed")));
+  QVERIFY(dir.mkdir(QStringLiteral("outside")));
+  const QDir allowed_dir(dir.filePath(QStringLiteral("allowed")));
+  const QString path = write_file(allowed_dir, QStringLiteral("a.md"), QStringLiteral("# A\n"));
+  const QString secret =
+      write_file(QDir(dir.filePath(QStringLiteral("outside"))), QStringLiteral("s.md"), QStringLiteral("secret\n"));
+
+  MainWindow window(QDir(settings_dir.path()).filePath(QStringLiteral("settings.ini")));
+  const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
+  window.set_mcp_server_name(name);
+  mcp_action(window)->setChecked(true);
+  allow_mcp_folder(window, allowed_dir.path());
+  QVERIFY(window.open_file(path));
+
+  QVERIFY(QFile::remove(path));
+  QVERIFY(QFile::link(secret, path));
+  QFile through_link(path);
+  QVERIFY(through_link.open(QIODevice::ReadOnly));
+  window.current_tab()->reload_from_disk(through_link.readAll());
+  through_link.close();
+  QCOMPARE(window.current_tab()->editor()->text(), std::string("secret\n"));
+  QVERIFY(QFile::remove(path));
+  write_file(allowed_dir, QStringLiteral("a.md"), QStringLiteral("# A again\n"));
+
+  const auto list = ask(name, QJsonObject{{"v", 1}, {"op", "list"}});
+  QVERIFY(list.has_value());
+  QCOMPARE(*list, (QJsonObject{{"files", QJsonArray{}}}));
+  const auto read = ask(name, QJsonObject{{"v", 1}, {"op", "read"}, {"path", path}});
+  QVERIFY(read.has_value());
+  QCOMPARE(*read, (QJsonObject{{"open", false}}));
+
+  QFile plain(path);
+  QVERIFY(plain.open(QIODevice::ReadOnly));
+  window.current_tab()->reload_from_disk(plain.readAll());
+  const auto again = ask(name, QJsonObject{{"v", 1}, {"op", "read"}, {"path", path}});
+  QVERIFY(again.has_value());
+  QCOMPARE(*again, (QJsonObject{{"open", true}, {"text", QStringLiteral("# A again\n")}}));
+}
+
+void TestMcpServer::empty_allowed_folders_blocks_list_and_show() {
+  QTemporaryDir settings_dir;
+  QTemporaryDir work_dir;
+  QTemporaryDir socket_dir;
+  const QString a = write_file(QDir(work_dir.path()), QStringLiteral("a.md"), QStringLiteral("# A\n"));
+
+  MainWindow window(QDir(settings_dir.path()).filePath(QStringLiteral("settings.ini")));
+  const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
+  window.set_mcp_server_name(name);
+  mcp_action(window)->setChecked(true);
+  QVERIFY(window.open_file(a));
+
+  const auto list = ask(name, QJsonObject{{"v", 1}, {"op", "list"}});
+  QVERIFY(list.has_value());
+  QCOMPARE(*list, (QJsonObject{{"files", QJsonArray()}}));
+  QCOMPARE(show(name, a), (QJsonObject{{"shown", false}, {"reason", "not_allowed"}}));
+}
+
+void TestMcpServer::set_allowed_folders_refuses_protected_dir() {
+  QTemporaryDir settings_dir;
+  const QString settings_file = QDir(settings_dir.path()).filePath(QStringLiteral("settings.ini"));
+  const QString settings_dir_key = QFileInfo(settings_dir.path()).canonicalFilePath();
+
+  MainWindow window(settings_file);
+  const QStringList refused = window.set_mcp_allowed_folders({settings_dir.path()});
+  QCOMPARE(refused, QStringList{settings_dir_key});
+  QVERIFY(window.mcp_allowed_folders().isEmpty());
+  QVERIFY(window.mcp_effective_folders().isEmpty());
+
+  {
+    QSettings settings(settings_file, QSettings::IniFormat);
+    settings.setValue(QStringLiteral("mcp/allowed_folders"), QStringList{settings_dir_key});
+  }
+  MainWindow second(settings_file);
+  QCOMPARE(second.mcp_allowed_folders(), QStringList{settings_dir_key});
+  QVERIFY(second.mcp_effective_folders().isEmpty());
+}
+
+void TestMcpServer::mcp_status_section() {
+  QTemporaryDir settings_dir;
+  QTemporaryDir work_dir;
+  QTemporaryDir socket_dir;
+
+  MainWindow window(QDir(settings_dir.path()).filePath(QStringLiteral("settings.ini")));
+  const QString name = QDir(socket_dir.path()).filePath(QStringLiteral("mcp"));
+  window.set_mcp_server_name(name);
+  window.show();
+  QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+  QLabel* label = window.findChild<QLabel*>(QStringLiteral("mcp_status"));
+  QVERIFY(label != nullptr);
+  QWidget* frame = label->parentWidget();
+  QVERIFY(frame != nullptr);
+  QVERIFY(!frame->isVisible());
+
+  mcp_action(window)->setChecked(true);
+  QVERIFY(window.mcp_listening());
+  QVERIFY(frame->isVisible());
+  QCOMPARE(frame->toolTip(),
+           QObject::tr("MCP server on. No allowed folder: agents get no file. Tools -> MCP Allowed Folders."));
+
+  allow_mcp_folder(window, work_dir.path());
+  QCOMPARE(frame->toolTip(), QObject::tr("MCP server on. Agents get the open files in:\n%1")
+                                 .arg(QDir::toNativeSeparators(QFileInfo(work_dir.path()).canonicalFilePath())));
+
+  mcp_action(window)->setChecked(false);
+  QVERIFY(!frame->isVisible());
 }
 
 QTEST_MAIN(TestMcpServer)

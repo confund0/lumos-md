@@ -26,6 +26,7 @@
 
 #include "drafts.hpp"
 #include "find_bar.hpp"
+#include "mcp_access.hpp"
 #include "link_open.hpp"
 #include "lumos/log.hpp"
 #include "lumos/qt/source_editor.hpp"
@@ -113,6 +114,7 @@ bool DocumentTab::load(const QString& path, bool keep_position, QString* error) 
   }
   const QByteArray bytes = f.readAll();
   path_ = absolute_path(path);
+  text_sources_ = {mcp_path_key(path_)};
   base_ = bytes;
   saved_sha256_ = sha256_hex(bytes);
   kept_sha256_.clear();
@@ -223,6 +225,7 @@ bool DocumentTab::adopt_draft(const QString& id, std::unique_ptr<QLockFile> lock
 void DocumentTab::reload_from_disk(const QByteArray& bytes) {
   editor_->replace_text(std::string(bytes.constData(), static_cast<std::size_t>(bytes.size())));
   editor_->mark_saved();
+  text_sources_ = {mcp_path_key(path_)};
   base_ = bytes;
   saved_sha256_ = sha256_hex(bytes);
   kept_sha256_.clear();
@@ -233,6 +236,7 @@ void DocumentTab::reload_from_disk(const QByteArray& bytes) {
 
 void DocumentTab::use_merge(const QByteArray& result, const QByteArray& seen) {
   editor_->replace_text(std::string(result.constData(), static_cast<std::size_t>(result.size())));
+  if (const QString key = mcp_path_key(path_); !text_sources_.contains(key)) text_sources_ << key;
   base_ = seen;
   saved_sha256_ = sha256_hex(seen);
   kept_sha256_.clear();

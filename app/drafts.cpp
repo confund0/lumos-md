@@ -86,7 +86,7 @@ QString path_draft_id(const QString& path) {
 QString new_untitled_draft_id() {
   const quint64 bits = QRandomGenerator::system()->generate64();
   char hex[17];
-  std::snprintf(hex, sizeof(hex), "%016llx", static_cast<unsigned long long>(bits));
+  static_cast<void>(std::snprintf(hex, sizeof(hex), "%016llx", static_cast<unsigned long long>(bits)));
   return QStringLiteral("u-") + QString::fromLatin1(hex);
 }
 

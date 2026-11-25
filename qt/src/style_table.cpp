@@ -1,12 +1,15 @@
 #include "lumos/qt/style_table.hpp"
 
 #include <QFontDatabase>
+#include <QFontInfo>
+
+#include <cmath>
 
 namespace lumos::qt {
 namespace {
 
 QColor mix(const QColor& a, const QColor& b, double t) {
-  auto ch = [t](int x, int y) { return static_cast<int>(x + (y - x) * t + 0.5); };
+  auto ch = [t](int x, int y) { return static_cast<int>(std::lround(x + (y - x) * t)); };
   return QColor(ch(a.red(), b.red()), ch(a.green(), b.green()), ch(a.blue(), b.blue()));
 }
 
@@ -43,7 +46,8 @@ StyleTable StyleTable::make_default(const QFont& base, const QPalette& palette) 
 
   t[NodeKind::heading].setFontWeight(QFont::Bold);
   const double sizes[6] = {2.0, 1.6, 1.35, 1.2, 1.1, 1.0};
-  const double point = base.pointSizeF() > 0 ? base.pointSizeF() : 10.0;
+  double point = base.pointSizeF() > 0 ? base.pointSizeF() : QFontInfo(base).pointSizeF();
+  if (point <= 0) point = 10.0;
   for (std::size_t i = 0; i < 6; ++i) t.headings[i].setFontPointSize(point * sizes[i]);
   t[NodeKind::block_quote] = color(hue(0x5a, 0x8a, 0x5a));
   t[NodeKind::block_quote].setFontItalic(true);
